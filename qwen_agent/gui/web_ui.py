@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+import json
 import os
 import pprint
 import re
@@ -21,7 +23,7 @@ from qwen_agent import Agent, MultiAgentHub
 from qwen_agent.agents.user_agent import PENDING_USER_INPUT
 from qwen_agent.gui.gradio_utils import format_cover_html
 from qwen_agent.gui.utils import convert_fncall_to_text, convert_history_to_chatbot, get_avatar_image
-from qwen_agent.llm.schema import AUDIO, CONTENT, FILE, IMAGE, NAME, ROLE, USER, VIDEO, Message
+from qwen_agent.llm.schema import ASSISTANT, AUDIO, CONTENT, FILE, IMAGE, NAME, ROLE, USER, VIDEO, Message
 from qwen_agent.log import logger
 from qwen_agent.utils.utils import print_traceback
 
@@ -72,6 +74,19 @@ class WebUI:
         self.input_placeholder = chatbot_config.get('input.placeholder', '跟我聊聊吧～')
         self.prompt_suggestions = chatbot_config.get('prompt.suggestions', [])
         self.verbose = chatbot_config.get('verbose', False)
+        
+        # Store original function maps for tool toggling
+        self.original_function_maps = {}
+        for i, agent in enumerate(self.agent_list):
+            if hasattr(agent, 'function_map') and agent.function_map:
+                self.original_function_maps[i] = dict(agent.function_map)
+        
+        # Build a master list of ALL tools across all agents
+        self.all_available_tools = set()
+        for i, agent in enumerate(self.agent_list):
+            if hasattr(agent, 'function_map') and agent.function_map:
+                self.all_available_tools.update(agent.function_map.keys())
+        self.all_available_tools = sorted(list(self.all_available_tools))
 
     """
     Run the chatbot.
@@ -102,18 +117,21 @@ class WebUI:
                 theme=customTheme,
         ) as demo:
             history = gr.State([])
+            sub_agent_history = gr.State([])  # Track sub-agent conversations
+            
             with ms.Application():
                 with gr.Row(elem_classes='container'):
-                    with gr.Column(scale=4):
+                    with gr.Column(scale=3):  # Main chat - slightly smaller
                         chatbot = mgr.Chatbot(value=convert_history_to_chatbot(messages=messages),
                                               avatar_images=[
                                                   self.user_config,
                                                   self.agent_config_list,
                                               ],
-                                              height=850,
+                                              height=700,
                                               avatar_image_width=80,
                                               flushing=False,
                                               show_copy_button=True,
+                                              label='Main Chat',
                                               latex_delimiters=[{
                                                   'left': '\\(',
                                                   'right': '\\)',
@@ -149,6 +167,23 @@ class WebUI:
                             sources=["microphone"],
                             type="filepath"
                         )
+                    
+                    # Sub-agent conversation panel (visible when manager delegates)
+                    with gr.Column(scale=2, visible=(len(self.agent_list) > 1)) as sub_agent_panel:
+                        sub_chatbot = mgr.Chatbot(
+                            value=[],
+                            label='🔄 Sub-Agent Activity',
+                            height=700,
+                            avatar_image_width=60,
+                            flushing=False,
+                            show_copy_button=True,
+                        )
+                        sub_agent_status = gr.Textbox(
+                            label='Status',
+                            value='Ready',
+                            interactive=False,
+                            lines=2
+                        )
 
                     with gr.Column(scale=1):
                         if len(self.agent_list) > 1:
@@ -163,6 +198,23 @@ class WebUI:
                         agent_info_block = self._create_agent_info_block()
 
                         agent_plugins_block = self._create_agent_plugins_block()
+
+                        # Add event handler for tool toggle
+                        if len(self.agent_list) > 1:
+                            agent_plugins_block.change(
+                                fn=self.toggle_tools,
+                                inputs=[agent_plugins_block, agent_selector],
+                                outputs=[agent_plugins_block],
+                                queue=False,
+                            )
+                        else:
+                            # Single agent case - use constant 0 for agent index
+                            agent_plugins_block.change(
+                                fn=self.toggle_tools,
+                                inputs=[agent_plugins_block],
+                                outputs=[agent_plugins_block],
+                                queue=False,
+                            )
 
                         if self.prompt_suggestions:
                             gr.Examples(
@@ -193,8 +245,15 @@ class WebUI:
                             [chatbot, agent_selector],
                         ).then(
                             self.agent_run,
-                            [chatbot, history, agent_selector],
-                            [chatbot, history, agent_selector],
+                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
+                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
+                        )
+                    elif len(self.agent_list) > 1:
+                        # Multiple agents but mention disabled - still pass agent_selector
+                        input_promise = input_promise.then(
+                            self.agent_run,
+                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
+                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
                         )
                     else:
                         input_promise = input_promise.then(
@@ -212,8 +271,46 @@ class WebUI:
                                                                        server_port=server_port)
 
     def change_agent(self, agent_selector):
+        # Restore original function map when switching agents
+        if agent_selector in self.original_function_maps:
+            self.agent_list[agent_selector].function_map = self.original_function_maps[agent_selector]
         yield agent_selector, self._create_agent_info_block(agent_selector), self._create_agent_plugins_block(
             agent_selector)
+
+    def toggle_tools(self, selected_tools, agent_selector=None):
+        """Update the agent's available tools based on user selection with cross-agent discovery."""
+        if agent_selector is None:
+            agent_selector = 0
+        
+        agent = self.agent_list[agent_selector]
+        if hasattr(agent, 'function_map'):
+            new_map = {}
+            for t_name in selected_tools:
+                # 1. Try to restore from this agent's original map
+                if agent_selector in self.original_function_maps and t_name in self.original_function_maps[agent_selector]:
+                    new_map[t_name] = self.original_function_maps[agent_selector][t_name]
+                # 2. Try to discover from other agents
+                else:
+                    discovered_tool = None
+                    for other_idx, other_map in self.original_function_maps.items():
+                        if t_name in other_map:
+                            # Found it! Copy the tool instance
+                            discovered_tool = copy.copy(other_map[t_name])
+                            
+                            # Reconfigure for current agent if it has an agent_name attribute
+                            if hasattr(discovered_tool, 'agent_name'):
+                                discovered_tool.agent_name = agent.name
+                            break
+                    
+                    if discovered_tool:
+                        new_map[t_name] = discovered_tool
+            
+            # If no tools selected, Qwen framework usually wants all restored or empty?
+            # User expectation: if I uncheck everything, agent has no tools.
+            # But if I check one, it should have ONLY that one.
+            agent.function_map = new_map
+            
+        yield self._create_agent_plugins_block(agent_selector)
 
     def add_text(self, _input, _audio_input, _chatbot, _history):
         _history.append({
@@ -265,7 +362,7 @@ class WebUI:
 
         yield _chatbot, _agent_selector
 
-    def agent_run(self, _chatbot, _history, _agent_selector=None):
+    def agent_run(self, _chatbot, _history, _agent_selector=None, _sub_chatbot=None, _sub_status=None):
         if self.verbose:
             logger.info('agent_run input:\n' + pprint.pformat(_history, indent=2))
 
@@ -276,12 +373,27 @@ class WebUI:
         agent_runner = self.agent_list[_agent_selector or 0]
         if self.agent_hub:
             agent_runner = self.agent_hub
+        
+        # Initialize sub-agent chat if we have a sub-chatbot
+        if _sub_chatbot is not None:
+            _sub_chatbot = _sub_chatbot or []
+            _sub_chatbot.append([None, f"🚀 {agent_runner.name} is working..."])
+            if _sub_status:
+                _sub_status = "Agent thinking..."
+        
+        # Track previously processed response count and sub-chatbot length 
+        # to avoid re-processing old messages and spamming Gradio with unchanged state
+        _prev_rsp_count = 0
+        _prev_sub_len = len(_sub_chatbot) if _sub_chatbot is not None else 0
+        
         responses = []
         for responses in agent_runner.run(_history, **self.run_kwargs):
             if not responses:
                 continue
             if responses[-1][CONTENT] == PENDING_USER_INPUT:
                 logger.info('Interrupted. Waiting for user input!')
+                if _sub_chatbot is not None:
+                    _sub_chatbot.append([None, "⏳ Waiting for your input..."])
                 break
 
             display_responses = convert_fncall_to_text(responses)
@@ -289,6 +401,75 @@ class WebUI:
                 continue
             if display_responses[-1][CONTENT] is None:
                 continue
+
+            # Update sub-agent panel from agent_pool streaming state
+            if _sub_chatbot is not None:
+                # Try to read live streaming state from OrchestratorAgent's agent_pool
+                _agent_pool = getattr(agent_runner, 'agent_pool', None)
+                if _agent_pool and hasattr(_agent_pool, 'sub_agent_state'):
+                    new_sub_chatbot = []
+                    
+                    # Find the deeply active sub-agent (the last one marked active, or the most recent)
+                    active_sa_name = None
+                    active_sa_state = None
+                    for sa_name, sa_state in _agent_pool.sub_agent_state.items():
+                        if sa_state.get('active'):
+                            active_sa_name = sa_name
+                            active_sa_state = sa_state
+                    
+                    # If none are currently 'active' (e.g. they just finished), show the very last one
+                    if not active_sa_name and _agent_pool.sub_agent_state:
+                        active_sa_name, active_sa_state = list(_agent_pool.sub_agent_state.items())[-1]
+                        
+                    if active_sa_name and active_sa_state:
+                        messages = active_sa_state.get('messages', [])
+                        if messages:
+                            # Apply identical formatting as main chat
+                            formatted_msgs = convert_fncall_to_text(messages)
+                            
+                            # Add a header for the specific sub-agent
+                            new_sub_chatbot.append([f"🤝 Conversation with **{active_sa_name}**", None])
+                            
+                            # Convert messages to Chatbot [[user, assistant], ...] format
+                            current_pair = [None, None]
+                            for msg in formatted_msgs:
+                                role = msg.get('role')
+                                content = msg.get('content')
+                                if role == USER:
+                                    if current_pair[0] is not None:
+                                        new_sub_chatbot.append(current_pair)
+                                        current_pair = [None, None]
+                                    current_pair[0] = content
+                                elif role == ASSISTANT:
+                                    current_pair[1] = content
+                                    new_sub_chatbot.append(current_pair)
+                                    current_pair = [None, None]
+                            
+                            if current_pair[0] is not None or current_pair[1] is not None:
+                                new_sub_chatbot.append(current_pair)
+                            
+                            if _sub_status and active_sa_state.get('active'):
+                                _sub_status = f"{active_sa_name} is responding..."
+
+                    _sub_chatbot = new_sub_chatbot
+                else:
+                    # Fallback for non-OrchestratorAgent: show main agent tool calls
+                    new_responses = responses[_prev_rsp_count:]
+                    for rsp in new_responses:
+                        role = rsp.get('role', '')
+                        fn_call = rsp.get('function_call')
+                        if role == 'assistant' and fn_call:
+                            tool_name = fn_call.get('name', 'tool') if isinstance(fn_call, dict) else getattr(fn_call, 'name', 'tool')
+                            _sub_chatbot.append([f"🔧 {tool_name}", "Calling..."])
+                        elif role == 'function':
+                            tool_name = rsp.get('name', 'tool')
+                            result_preview = str(rsp.get('content', ''))[:200]
+                            for i in range(len(_sub_chatbot) - 1, -1, -1):
+                                if _sub_chatbot[i][0] and f"🔧 {tool_name}" in _sub_chatbot[i][0]:
+                                    _sub_chatbot[i] = [f"✅ {tool_name}", result_preview or "Done"]
+                                    break
+
+                _prev_rsp_count = len(responses)
 
             while len(display_responses) > num_output_bubbles:
                 # Create a new chat bubble
@@ -306,18 +487,37 @@ class WebUI:
             if len(self.agent_list) > 1:
                 _agent_selector = agent_index
 
-            if _agent_selector is not None:
-                yield _chatbot, _history, _agent_selector
+            # Yield with sub-chatbot updates
+            if _sub_chatbot is not None:
+                if _agent_selector is not None:
+                    yield _chatbot, _history, _agent_selector, _sub_chatbot, _sub_status
+                else:
+                    yield _chatbot, _history, _sub_chatbot, _sub_status
             else:
-                yield _chatbot, _history
+                if _agent_selector is not None:
+                    yield _chatbot, _history, _agent_selector
+                else:
+                    yield _chatbot, _history
 
         if responses:
             _history.extend([res for res in responses if res[CONTENT] != PENDING_USER_INPUT])
 
-        if _agent_selector is not None:
-            yield _chatbot, _history, _agent_selector
+        # Final update to sub-agent chat
+        if _sub_chatbot is not None:
+            _sub_chatbot.append([None, f"✅ {agent_runner.name} completed!"])
+            if _sub_status:
+                _sub_status = "Ready"
+
+        if _sub_chatbot is not None:
+            if _agent_selector is not None:
+                yield _chatbot, _history, _agent_selector, _sub_chatbot, _sub_status
+            else:
+                yield _chatbot, _history, _sub_chatbot, _sub_status
         else:
-            yield _chatbot, _history
+            if _agent_selector is not None:
+                yield _chatbot, _history, _agent_selector
+            else:
+                yield _chatbot, _history
 
         if self.verbose:
             logger.info('agent_run response:\n' + pprint.pformat(responses, indent=2))
@@ -358,19 +558,19 @@ class WebUI:
 
         agent_interactive = self.agent_list[agent_index]
 
-        if agent_interactive.function_map:
-            capabilities = [key for key in agent_interactive.function_map.keys()]
-            return gr.CheckboxGroup(
-                label='插件',
-                value=capabilities,
-                choices=capabilities,
-                interactive=False,
-            )
-
+        # Show ALL available tools across all agents, not just current agent's tools
+        # This allows users to freely enable/disable any tool for any agent
+        all_tools = self.all_available_tools
+        
+        # Get currently enabled tools for this agent
+        if hasattr(agent_interactive, 'function_map'):
+            enabled_tools = list(agent_interactive.function_map.keys())
         else:
-            return gr.CheckboxGroup(
-                label='插件',
-                value=[],
-                choices=[],
-                interactive=False,
-            )
+            enabled_tools = []
+        
+        return gr.CheckboxGroup(
+            label='Tools (enable/disable freely)',
+            value=enabled_tools,
+            choices=all_tools,  # Show all tools from all agents
+            interactive=True,
+        )

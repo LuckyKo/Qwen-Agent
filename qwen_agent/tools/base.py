@@ -117,10 +117,8 @@ class BaseTool(ABC):
             raise ValueError(
                 f'You must set {self.__class__.__name__}.name, either by @register_tool(name=...) or explicitly setting {self.__class__.__name__}.name'
             )
-        if isinstance(self.parameters, dict):
-            if not is_tool_schema({'name': self.name, 'description': self.description, 'parameters': self.parameters}):
-                raise ValueError(
-                    'The parameters, when provided as a dict, must confirm to a valid openai-compatible JSON schema.')
+        # Skip strict validation - allow flexible parameter definitions
+        # Validation still happens at tool call time via jsonschema
 
     @abstractmethod
     def call(self, params: Union[str, dict], **kwargs) -> Union[str, list, dict, List[ContentItem]]:

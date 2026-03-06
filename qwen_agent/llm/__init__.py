@@ -76,7 +76,11 @@ def get_chat_model(cfg: Union[dict, str] = 'qwen-plus') -> BaseChatModel:
 
     if 'model_server' in cfg:
         if cfg['model_server'].strip().startswith('http'):
-            model_type = 'oai'
+            model = cfg.get('model', '').lower()
+            if '-vl' in model or 'qvq' in model or 'vision' in model:
+                model_type = 'qwenvl_oai'
+            else:
+                model_type = 'oai'
             cfg['model_type'] = model_type
             return LLM_REGISTRY[model_type](cfg)
 

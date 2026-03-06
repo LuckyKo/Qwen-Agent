@@ -1,0 +1,71 @@
+2026-03-06 10:36:16,675 - base.py - 780 - INFO - ALL tokens: 962, Available tokens: 57542
+2026-03-06 10:36:29,991 - base.py - 780 - INFO - ALL tokens: 1050, Available tokens: 57542
+Traceback (most recent call last):
+  File "C:\Python312\Lib\site-packages\gradio\queueing.py", line 715, in process_events
+    response = await route_utils.call_process_api(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\route_utils.py", line 322, in call_process_api
+    output = await app.get_blocks().process_api(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\blocks.py", line 2137, in process_api
+    result = await self.call_function(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\blocks.py", line 1675, in call_function
+    prediction = await utils.async_iteration(iterator)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 735, in async_iteration
+    return await anext(iterator)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 729, in __anext__
+    return await anyio.to_thread.run_sync(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\anyio\to_thread.py", line 56, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\anyio\_backends\_asyncio.py", line 2470, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\anyio\_backends\_asyncio.py", line 967, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 712, in run_sync_iterator_async
+    return next(iterator)
+           ^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 873, in gen_wrapper
+    response = next(iterator)
+               ^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\gui\web_ui.py", line 390, in agent_run
+    for responses in agent_runner.run(_history, **self.run_kwargs):
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 124, in run
+    for rsp in self._run(messages=new_messages, **kwargs):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\agent_orchestrator.py", line 314, in _run
+    for output in output_stream:
+                  ^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 404, in _convert_messages_iterator_to_target_type
+    for messages in messages_iter:
+                    ^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 282, in _format_and_cache
+    for o in output:
+             ^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 388, in _postprocess_messages_iterator
+    for pre_msg in messages:
+                   ^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 836, in retry_model_service_iterator
+    num_retries, delay = _raise_or_delay(e, num_retries, delay, max_retries)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 850, in _raise_or_delay
+    raise e
+  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 831, in retry_model_service_iterator
+    for rsp in it_fn():
+               ^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\oai.py", line 104, in _chat_stream
+    messages = self.convert_messages_to_dicts(messages)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\qwenvl_oai.py", line 52, in convert_messages_to_dicts
+    v = conv_multimodel_value(t, v)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\qwenvl_oai.py", line 117, in conv_multimodel_value
+    raise ModelServiceError(f'Local file "{v}" does not exist.')
+qwen_agent.llm.base.ModelServiceError: Local file "/N:/work/WD/Qwen-Agent/workspace/scr_01.png" does not exist.

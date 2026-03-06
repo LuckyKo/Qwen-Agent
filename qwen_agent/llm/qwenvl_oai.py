@@ -23,7 +23,12 @@ from qwen_agent.llm.base import register_llm
 from qwen_agent.llm.oai import TextChatAtOAI
 from qwen_agent.llm.schema import ContentItem, Message
 from qwen_agent.log import logger
-from qwen_agent.utils.utils import encode_audio_as_base64, encode_image_as_base64, encode_video_as_base64
+from qwen_agent.utils.utils import (
+    encode_audio_as_base64,
+    encode_image_as_base64,
+    encode_video_as_base64,
+    sanitize_chrome_file_path,
+)
 
 
 @register_llm('qwenvl_oai')
@@ -102,7 +107,7 @@ class QwenVLChatAtOAI(TextChatAtOAI):
 
 def conv_multimodel_value(t, v):
     if v.startswith('file://'):
-        v = v[len('file://'):]
+        v = sanitize_chrome_file_path(v)
     if not v.startswith(('http://', 'https://', 'data:')):
         if os.path.exists(v):
             if t == 'image':
