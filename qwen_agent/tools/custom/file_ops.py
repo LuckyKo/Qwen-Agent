@@ -184,16 +184,24 @@ class EditFile(BaseTool):
                 'type': 'string',
                 'description': 'Path to the file relative to workspace directory'
             },
-            'content': {
+            'old_content': {
                 'type': 'string',
-                'description': 'New content for the file (replaces entire file)'
+                'description': 'The EXACT unique block of text to be replaced.'
+            },
+            'new_content': {
+                'type': 'string',
+                'description': 'The new text to insert.'
+            },
+            'full_content': {
+                'type': 'string',
+                'description': 'Optional: use ONLY if you must overwrite the entire file (discouraged for large files).'
             },
             'justification': {
                 'type': 'string',
                 'description': 'Why you need to edit this file'
             }
         },
-        'required': ['path', 'content', 'justification'],
+        'required': ['path', 'justification'],
     }
     
     def __init__(self, cfg=None, **kwargs):
@@ -207,28 +215,21 @@ class EditFile(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         params = self._verify_json_format_args(params)
         path = params['path']
-        content = params['content']
-        justification = params['justification']
+        old_content = params.get('old_content')
+        new_content = params.get('new_content')
+        full_content = params.get('full_content')
         
-        resolved = (self.agent_pool.operation_manager.base_dir / path).resolve()
-        owner = self.agent_pool.operation_manager.get_file_owner(str(resolved))
-        
-        if owner == self.agent_name:
-            try:
-                resolved.write_text(content, encoding='utf-8')
-                return f"AUTO_APPROVED: Edited {path} ({len(content)} characters)"
-            except Exception as e:
-                return f"ERROR: {str(e)}"
-        
-        result = self.agent_pool.operation_manager.request_operation(
+        # Backward compatibility for models that still send 'content' instead of old/new
+        if 'content' in params and not old_content:
+            full_content = params['content']
+            
+        return self.agent_pool.operation_manager.edit_file(
+            path=path,
             agent_name=self.agent_name,
-            operation_type=OperationType.FILE_EDIT.value,
-            parameters={'path': path, 'content': content},
-            description=f"Edit file {path}",
-            context=f"File is owned by '{owner}'",
-            justification=justification
+            old_content=old_content,
+            new_content=new_content,
+            full_content=full_content
         )
-        return result
 
 class ListDir(BaseTool):
     """List contents of a directory in the workspace."""
@@ -324,3 +325,71 @@ class DeleteFile(BaseTool):
         params = self._verify_json_format_args(params)
         path = params['path']
         return self.agent_pool.operation_manager.delete_file(path, self.agent_name)
+
+class CopyFile(BaseTool):
+    """Copy a file or directory."""
+    
+    name = 'copy_file'
+    description = 'Copy a file or directory to a new location in the workspace.'
+    parameters = {
+        'type': 'object',
+        'properties': {
+            'source': {
+                'type': 'string',
+                'description': 'Path to the source file/directory relative to workspace'
+            },
+            'destination': {
+                'type': 'string',
+                'description': 'Path to the destination relative to workspace'
+            }
+        },
+        'required': ['source', 'destination'],
+    }
+    
+    def __init__(self, cfg=None, **kwargs):
+        try:
+            super().__init__(cfg)
+        except (ValueError, TypeError):
+            super().__init__()
+        self.agent_pool = kwargs.get('agent_pool')
+        self.agent_name = kwargs.get('agent_name')
+    
+    def call(self, params: str, **kwargs) -> str:
+        params = self._verify_json_format_args(params)
+        source = params['source']
+        destination = params['destination']
+        return self.agent_pool.operation_manager.copy_file(source, destination, self.agent_name)
+
+class MoveFile(BaseTool):
+    """Move a file or directory."""
+    
+    name = 'move_file'
+    description = 'Move a file or directory to a new location in the workspace.'
+    parameters = {
+        'type': 'object',
+        'properties': {
+            'source': {
+                'type': 'string',
+                'description': 'Path to the source file/directory relative to workspace'
+            },
+            'destination': {
+                'type': 'string',
+                'description': 'Path to the destination relative to workspace'
+            }
+        },
+        'required': ['source', 'destination'],
+    }
+    
+    def __init__(self, cfg=None, **kwargs):
+        try:
+            super().__init__(cfg)
+        except (ValueError, TypeError):
+            super().__init__()
+        self.agent_pool = kwargs.get('agent_pool')
+        self.agent_name = kwargs.get('agent_name')
+    
+    def call(self, params: str, **kwargs) -> str:
+        params = self._verify_json_format_args(params)
+        source = params['source']
+        destination = params['destination']
+        return self.agent_pool.operation_manager.move_file(source, destination, self.agent_name)

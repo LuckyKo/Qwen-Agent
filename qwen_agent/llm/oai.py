@@ -15,6 +15,7 @@
 import copy
 import logging
 import os
+import requests
 from pprint import pformat
 from typing import Dict, Iterator, List, Optional
 
@@ -94,6 +95,67 @@ class TextChatAtOAI(BaseFnCallModel):
 
             self._complete_create = _complete_create
             self._chat_complete_create = _chat_complete_create
+
+        # Attempt to dynamically detect context window size from local model servers (LM Studio, Ollama, etc.)
+        if api_base and self.model and 'max_input_tokens' not in self.generate_cfg:
+            try:
+                models_url = f"{api_base.rstrip('/')}/models"
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key != 'EMPTY' else {}
+                response = requests.get(models_url, headers=headers, timeout=5)
+                if response.status_code == 200:
+                    models_data = response.json()
+                    data = models_data.get('data', [])
+                    target_model = None
+                    
+                    # 1. Try exact match
+                    for m in data:
+                        if m.get('id') == self.model:
+                            target_model = m
+                            break
+                    
+                    # 2. If no exact match and only one model, assume it's the one
+                    if not target_model and len(data) == 1:
+                        target_model = data[0]
+                        logger.info(f"Using single available model '{target_model.get('id')}' for context detection.")
+                    
+                    # 3. Special case for LM Studio / whatever_is_on
+                    if not target_model and (self.model == 'whatever_is_on' or not data):
+                        # Use the first model if it exists and looks plausible
+                        if data:
+                            target_model = data[0]
+                            logger.info(f"Picking first available model '{target_model.get('id')}' for potential context detection.")
+                    
+                    if target_model:
+                        # 4. Extract context length from model object (check direct and nested config)
+                        ctx_len = (target_model.get('context_length') or 
+                                   target_model.get('max_context_length') or
+                                   target_model.get('config', {}).get('context_length') or
+                                   target_model.get('config', {}).get('max_context_length'))
+                        
+                        # 5. If still missing, try querying the specific model endpoint
+                        if not ctx_len:
+                            try:
+                                specific_url = f"{models_url}/{target_model.get('id')}"
+                                logger.debug(f"Missing context metadata in list. Trying specific endpoint: {specific_url}")
+                                spec_resp = requests.get(specific_url, headers=headers, timeout=3)
+                                if spec_resp.status_code == 200:
+                                    spec_data = spec_resp.json()
+                                    ctx_len = (spec_data.get('context_length') or 
+                                               spec_data.get('max_context_length') or
+                                               spec_data.get('config', {}).get('context_length') or
+                                               spec_data.get('config', {}).get('max_context_length'))
+                            except Exception as inner_e:
+                                logger.debug(f"Individual model metadata query failed: {inner_e}")
+                        
+                        if ctx_len:
+                            logger.info(f"Dynamically detected context window for {target_model.get('id')}: {ctx_len}")
+                            self.generate_cfg['max_input_tokens'] = int(ctx_len)
+                        else:
+                            logger.info(f"Model {target_model.get('id')} found, but could not detect context length via API.")
+                    else:
+                        logger.debug(f"Could not identify a target model in {models_url} for context length detection.")
+            except Exception as e:
+                logger.debug(f"Optional context length detection failed: {e}")
 
     def _chat_stream(
         self,

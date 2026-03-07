@@ -109,7 +109,14 @@ def conv_multimodel_value(t, v):
     if v.startswith('file://'):
         v = sanitize_chrome_file_path(v)
     if not v.startswith(('http://', 'https://', 'data:')):
-        if os.path.exists(v):
+        v_exists = os.path.exists(v)
+        # On Windows, absolute paths like /N:/path are sometimes passed.
+        # Try stripping leading slash if it doesn't exist.
+        if not v_exists and os.name == 'nt' and v.startswith('/') and len(v) > 2 and v[2] == ':':
+            v = v[1:]
+            v_exists = os.path.exists(v)
+            
+        if v_exists:
             if t == 'image':
                 v = encode_image_as_base64(v, max_short_side_length=1080)
             elif t == 'video':

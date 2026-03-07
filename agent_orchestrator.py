@@ -12,9 +12,13 @@ Operation Approval System:
 import copy
 import os
 import json
+import logging
 from qwen_agent.agents import Assistant
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Union
+
+logger = logging.getLogger(__name__)
+
 from qwen_agent.llm.schema import (
     ASSISTANT,
     CONTENT,
@@ -44,6 +48,8 @@ from qwen_agent.tools.custom import (
     ListDir,
     Grep,
     DeleteFile,
+    CopyFile,
+    MoveFile,
     ApproveOperation,
     RejectOperation,
     AskAgent,
@@ -51,6 +57,8 @@ from qwen_agent.tools.custom import (
     ListPendingOperations,
     DismissAgent,
 )
+from qwen_agent.tools.code_interpreter import CodeInterpreter
+from qwen_agent.tools.custom.compression_tools import CompressContext
 
 
 class AgentPool:
@@ -63,13 +71,16 @@ class AgentPool:
         self.agent_configs: Dict[str, dict] = {}
         
         # Operation manager for approval-based operations
-        self.operation_manager = OperationManager('workspace')
+        self.operation_manager = OperationManager('workspace', agent_pool=self)
         
         # Persistent conversation histories for each sub-agent
         self.agent_conversations: Dict[str, List] = {}
         
         # Live streaming state for WebUI (updated during sub-agent execution)
         self.sub_agent_state: Dict[str, dict] = {}
+        
+        # Explicit stop flag for cancellation
+        self.stopped = False
         
         # Auto-load all agents from the agents directory
         self._discover_agents()
@@ -169,6 +180,44 @@ rules:
         """Clear an agent's conversation history."""
         self.agent_conversations[agent_name] = []
         self.sub_agent_state.pop(agent_name, None)
+    
+    def _apply_context_compression(self, agent_name: str, summary: str, fraction: float):
+        """
+        Actually replace the oldest messages in an agent's history with a summary.
+        Called by OperationManager after approval.
+        """
+        history = self.get_conversation(agent_name)
+        if not history:
+            return
+            
+        # Keep the first message if it's SYSTEM
+        system_msg = None
+        start_idx = 0
+        if history[0].get('role') == SYSTEM:
+            system_msg = history[0]
+            start_idx = 1
+            
+        messages_to_compress = history[start_idx:]
+        num_to_remove = int(len(messages_to_compress) * fraction)
+        
+        if num_to_remove <= 0:
+            return
+            
+        # Create the summary message
+        new_summary_msg = {
+            'role': SYSTEM,
+            'content': f"--- CONTEXT COMPRESSED ({int(fraction*100)}% of history summarized) ---\n\nSummary of previous context:\n{summary}\n\n--- END SUMMARY ---"
+        }
+        
+        # New history: [System] + [Summary] + [Remaining Messages]
+        new_history = []
+        if system_msg:
+            new_history.append(system_msg)
+        new_history.append(new_summary_msg)
+        new_history.extend(messages_to_compress[num_to_remove:])
+        
+        self.agent_conversations[agent_name] = new_history
+        logger.info(f"Compressed context for agent '{agent_name}'. Removed {num_to_remove} messages.")
     
     def get_agent_info(self, agent_name: str) -> Optional[dict]:
         """Get info about a specific agent."""
@@ -272,6 +321,40 @@ class OrchestratorAgent(Assistant):
     def __init__(self, agent_pool: AgentPool, **kwargs):
         super().__init__(**kwargs)
         self.agent_pool = agent_pool
+        from qwen_agent.utils.tokenization_qwen import count_tokens
+        self._count_tokens = count_tokens
+
+    def _get_history_tokens(self, messages: List[Message]) -> int:
+        """Calculate total tokens in a message list."""
+        total = 0
+        for msg in messages:
+            content = extract_text_from_message(msg, add_upload_info=False)
+            total += self._count_tokens(content)
+        return total
+
+    def _inject_compression_warning(self, messages: List[Message]):
+        """Inject a warning if context is getting full."""
+        # Get actual max tokens (detected from API or default)
+        max_tokens = self.llm.generate_cfg.get('max_input_tokens', 58000)
+        current_tokens = self._get_history_tokens(messages)
+        
+        if current_tokens > max_tokens * 0.85:
+            usage_pct = (current_tokens / max_tokens) * 100
+            warning = (
+                f"\n\n[SYSTEM WARNING: Context window at {usage_pct:.1f}% capacity ({current_tokens}/{max_tokens} tokens). "
+                "Consider using the `compress_context` tool to summarize old history and free up space. "
+                "Propose a fraction (e.g. 0.2 for 20%) and a justification. The summary will be sent for approval.]"
+            )
+            # Find the most recent message to append warning (temporarily)
+            if messages:
+                # We append to the last message's content if it's text, or add a system message
+                # Note: This is NOT saved to the permanent AgentPool history
+                last_msg = messages[-1]
+                if isinstance(last_msg.content, str):
+                    last_msg.content += warning
+                elif isinstance(last_msg.content, list):
+                    from qwen_agent.llm.schema import ContentItem
+                    last_msg.content.append(ContentItem(text=warning))
 
     @property
     def support_multimodal_input(self) -> bool:
@@ -329,11 +412,19 @@ class OrchestratorAgent(Assistant):
         response: List[Message] = []
 
         while num_llm_calls_available > 0:
+            if self.agent_pool.stopped:
+                logger.info(f"Agent {self.name} stopped by user.")
+                yield response
+                break
+                
             num_llm_calls_available -= 1
 
             extra_generate_cfg = {'lang': lang}
             if kwargs.get('seed') is not None:
                 extra_generate_cfg['seed'] = kwargs['seed']
+
+            # Inject warning if needed (only for the LLM call, doesn't affect saved history)
+            self._inject_compression_warning(messages)
 
             output_stream = self._call_llm(
                 messages=messages,
@@ -422,6 +513,9 @@ class OrchestratorAgent(Assistant):
             )
 
         # Determine the user message for the sub-agent
+        if self.agent_pool.stopped:
+            return f"Operation cancelled by user."
+            
         if tool_name == 'call_agent':
             # Fresh conversation — clear old context
             self.agent_pool.clear_conversation(agent_name)
@@ -486,6 +580,11 @@ class OrchestratorAgent(Assistant):
         final_resp: list = []
         try:
             for resp in agent.run(conv):
+                if self.agent_pool.stopped:
+                    logger.info(f"Sub-agent {agent_name} interrupted by user stop signal.")
+                    yield current_response
+                    break
+                    
                 final_resp = resp
                 
                 # Update streaming state with current conversation + latest assistant response
@@ -704,6 +803,11 @@ Available Manager Tools:
     view_tool.agent_pool = agent_pool
     orchestrator.function_map['view_image'] = view_tool
 
+    compress_tool = CompressContext()
+    compress_tool.agent_pool = agent_pool
+    compress_tool.agent_name = 'orchestrator'
+    orchestrator.function_map['compress_context'] = compress_tool
+
     return orchestrator
 
 
@@ -742,6 +846,11 @@ def load_sub_agent_with_tools(agent_pool: AgentPool, agent_name: str, llm_cfg: d
     write_tool.agent_name = agent_name
     agent.function_map['write_file'] = write_tool
     
+    # Add Python Sandbox tool (Code Interpreter)
+    # The Code Interpreter operates inside a Docker sandbox and mounts the workspace
+    code_tool = CodeInterpreter(cfg={'work_dir': str(agent_pool.operation_manager.base_dir)})
+    agent.function_map['code_interpreter'] = code_tool
+    
     edit_tool = EditFile()
     edit_tool.agent_pool = agent_pool
     edit_tool.agent_name = agent_name
@@ -764,6 +873,21 @@ def load_sub_agent_with_tools(agent_pool: AgentPool, agent_name: str, llm_cfg: d
     respond_tool.agent_pool = agent_pool
     respond_tool.agent_name = agent_name
     agent.function_map['respond_to_manager'] = respond_tool
+    
+    copy_tool = CopyFile()
+    copy_tool.agent_pool = agent_pool
+    copy_tool.agent_name = agent_name
+    agent.function_map['copy_file'] = copy_tool
+    
+    move_tool = MoveFile()
+    move_tool.agent_pool = agent_pool
+    move_tool.agent_name = agent_name
+    agent.function_map['move_file'] = move_tool
+    
+    compress_tool = CompressContext()
+    compress_tool.agent_pool = agent_pool
+    compress_tool.agent_name = agent_name
+    agent.function_map['compress_context'] = compress_tool
     
     # Update the agent's system message to mention abstract capabilities without heavily repeating specific tools 
     # (since the dynamic tool list handles the exact names and descriptions)

@@ -77,8 +77,13 @@ class BaseChatModel(ABC):
 
     def __init__(self, cfg: Optional[Dict] = None):
         cfg = cfg or {}
+        self.cfg = cfg
         self.model = cfg.get('model', '').strip()
         generate_cfg = copy.deepcopy(cfg.get('generate_cfg', {}))
+        # Support max_input_tokens at the top level of cfg
+        if 'max_input_tokens' in cfg and 'max_input_tokens' not in generate_cfg:
+            generate_cfg['max_input_tokens'] = cfg['max_input_tokens']
+            
         cache_dir = cfg.get('cache_dir', generate_cfg.pop('cache_dir', None))
         self.max_retries = generate_cfg.pop('max_retries', 0)
         self.generate_cfg = generate_cfg

@@ -1,4 +1,4 @@
-from .file_ops import ReadFile, ViewImage, WriteFile, EditFile, ListDir, Grep, DeleteFile
+from .file_ops import ReadFile, ViewImage, WriteFile, EditFile, ListDir, Grep, DeleteFile, CopyFile, MoveFile
 from .manager_ops import (
     CallAgent,
     ApproveOperation,
@@ -17,6 +17,8 @@ __all__ = [
     'ListDir',
     'Grep',
     'DeleteFile',
+    'CopyFile',
+    'MoveFile',
     'CallAgent',
     'ApproveOperation',
     'RejectOperation',

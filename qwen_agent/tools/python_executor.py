@@ -27,7 +27,7 @@ import json5
 import regex
 from tqdm import tqdm
 
-from qwen_agent.tools.base import BaseTool
+from qwen_agent.tools.base import BaseTool, register_tool
 from qwen_agent.utils.utils import extract_code
 
 
@@ -92,10 +92,10 @@ def _check_deps_for_python_executor():
             'Please install the required dependencies by running: pip install "qwen-agent[python_executor]"') from e
 
 
-# @register_tool('python_executor')  # Do not register this tool by default because it is dangerous.
+@register_tool('python_executor')
 class PythonExecutor(BaseTool):
     name = 'python_executor'
-    description = 'For executing python code. Not sandboxed. Do not use it for production purposes.'
+    description = 'Executes Python code DIRECTLY on the host machine (NOT sandboxed). Use this ONLY when you need to access host-side services on 127.0.0.1 that Docker cannot reach. Highly dangerous, use with caution.'
     parameters = {
         'type': 'object',
         'properties': {

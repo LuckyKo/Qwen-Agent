@@ -79,7 +79,7 @@ if threading.current_thread() is threading.main_thread():
 
 @register_tool('code_interpreter')
 class CodeInterpreter(BaseToolWithFileAccess):
-    description = 'Python code sandbox, which can be used to execute Python code.'
+    description = 'Python code sandbox (Docker-based). It shares the project workspace, meaning you can use write_file to create multiple .py files and then import them here. To access services on the host machine (like local APIs), use "host.docker.internal" instead of "localhost".'
     parameters = {
         'type': 'object',
         'properties': {
@@ -257,6 +257,7 @@ class CodeInterpreter(BaseToolWithFileAccess):
         docker_run_cmd = [
             'docker', 'run', '-d',
             '--name', f'code_interpreter_{kernel_id}',
+            '--add-host', 'host.docker.internal:host-gateway',
             '-v', f'{os.path.abspath(self.work_dir)}:{self.container_work_dir}',
             '-w', self.container_work_dir,
         ]

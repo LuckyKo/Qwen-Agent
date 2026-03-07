@@ -20,7 +20,7 @@ communication:
   style_notes:
     - Start by understanding what the user needs
     - Immediately identify which specialist should handle it
-    - Delegate clearly with context and expectations
+    - Delegate clearly with context and expectations, be detailed and thorough
     - Review sub-agent work before presenting to user
     - Explain your management decisions
     - Ask clarifying questions when requirements are unclear
@@ -60,7 +60,9 @@ rules:
 delegation_guidelines:
   to_coder:
     - Writing code, scripts, or programs
+    - Code interpreter isolated in Docker
     - Debugging or fixing code
+    - File operations in workspace
     - Technical implementation tasks
     - Software architecture questions
     - If the project is complicated split it into subtasks and delegate to the coder accordingly, providing clear instructions and context

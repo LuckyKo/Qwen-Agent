@@ -29,9 +29,13 @@ class OperationType(Enum):
     FILE_WRITE = "file_write"
     FILE_EDIT = "file_edit"
     FILE_DELETE = "file_delete"
+    FILE_COPY = "file_copy"
+    FILE_MOVE = "file_move"
+    FILE_REPLACE = "file_replace"
     API_CALL = "api_call"
     CODE_EXECUTE = "code_execute"
     EXTERNAL_TOOL = "external_tool"
+    CONTEXT_COMPRESSION = "context_compression"
     CUSTOM = "custom"
 
 
@@ -99,9 +103,10 @@ class OperationManager:
     between sub-agents and the manager/orchestrator.
     """
     
-    def __init__(self, base_dir: str = 'workspace'):
+    def __init__(self, base_dir: str = 'workspace', agent_pool=None):
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(exist_ok=True)
+        self.agent_pool = agent_pool
         
         # Pending operations awaiting approval
         self.operations: Dict[str, OperationRequest] = {}
@@ -302,6 +307,10 @@ Use request_id {request.request_id} to check status or respond to manager questi
         if request_id not in self.operations:
             return f"ERROR: Request ID '{request_id}' not found"
         
+        request = self.operations[request_id]
+        if request.agent_name == approver_name and request.operation_type != OperationType.CONTEXT_COMPRESSION.value:
+            return f"ERROR: Agent '{approver_name}' cannot approve their own request. User approval required."
+            
         request = self.operations.pop(request_id)
         
         if modifications:
@@ -315,24 +324,120 @@ Use request_id {request.request_id} to check status or respond to manager questi
         
         request.manager_response = response
         
-        # Track ownership for file operations
-        if request.operation_type in [OperationType.FILE_WRITE.value, OperationType.FILE_EDIT.value]:
-            path = request.parameters.get('path', '')
-            self.file_ownership[path] = request.agent_name
+        # Execute the actual operation
+        execution_error = None
+        try:
+            self._execute_operation(request)
+        except Exception as e:
+            execution_error = str(e)
+            request.status = "failed"
+            message = f"FAILED: Manager approved but execution failed: {execution_error}"
         
         # Add to history
         self.operation_history.append(request)
         
         # Notify agent via conversation
+        notification = f"Your request {request_id} was {message}.\nManager: {response}"
+        if execution_error:
+            notification += f"\n\nExecution Error: {execution_error}"
+            
         self._add_to_agent_conversation(
             request.agent_name,
             {
                 'role': 'system',
-                'content': f"Your request {request_id} was {message}.\nManager: {response}"
+                'content': notification
             }
         )
         
         return f"{message}. Request ID: {request_id}"
+
+    def _execute_operation(self, request: OperationRequest):
+        """Perform the actual disk or system operation after approval."""
+        op_type = request.operation_type
+        params = request.parameters
+        agent_name = request.agent_name
+
+        if op_type == OperationType.FILE_WRITE.value:
+            path = params.get('path')
+            content = params.get('content')
+            resolved = self._resolve_path(path)
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(content, encoding='utf-8')
+            self.file_ownership[str(resolved)] = agent_name
+
+        elif op_type in [OperationType.FILE_EDIT.value, OperationType.FILE_REPLACE.value]:
+            path = params.get('path')
+            old_content = params.get('old_content')
+            new_content = params.get('new_content')
+            # If it's a legacy FILE_EDIT with 'content' (full replacement), we might still support it for now or force surgical
+            if 'content' in params and 'old_content' not in params:
+                # Full replacement
+                resolved = self._resolve_path(path)
+                resolved.write_text(params['content'], encoding='utf-8')
+                self.file_ownership[str(resolved)] = agent_name
+            else:
+                # Surgical replacement
+                resolved = self._resolve_path(path)
+                content = resolved.read_text(encoding='utf-8')
+                
+                # Re-verify uniqueness at execution time to prevent corruption if file changed
+                count = content.count(old_content)
+                if count == 0:
+                    raise ValueError(f"Execution failed: Pattern not found in {path}")
+                if count > 1:
+                    raise ValueError(f"Execution failed: Pattern no longer unique in {path}")
+                    
+                new_full_content = content.replace(old_content, new_content)
+                resolved.write_text(new_full_content, encoding='utf-8')
+                self.file_ownership[str(resolved)] = agent_name
+
+        elif op_type == OperationType.FILE_DELETE.value:
+            path = params.get('path')
+            resolved = self._resolve_path(path)
+            if resolved.is_dir():
+                import shutil
+                shutil.rmtree(resolved)
+            else:
+                resolved.unlink()
+            if str(resolved) in self.file_ownership:
+                del self.file_ownership[str(resolved)]
+
+        elif op_type == OperationType.FILE_COPY.value:
+            source = params.get('source')
+            destination = params.get('destination')
+            src_path = self._resolve_path(source)
+            dest_path = self._resolve_path(destination)
+            import shutil
+            if src_path.is_dir():
+                shutil.copytree(src_path, dest_path, dirs_exist_ok=True)
+            else:
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, dest_path)
+            self.file_ownership[str(dest_path)] = agent_name
+
+        elif op_type == OperationType.FILE_MOVE.value:
+            source = params.get('source')
+            destination = params.get('destination')
+            src_path = self._resolve_path(source)
+            dest_path = self._resolve_path(destination)
+            import shutil
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(src_path, dest_path)
+            if str(src_path) in self.file_ownership:
+                del self.file_ownership[str(src_path)]
+            self.file_ownership[str(dest_path)] = agent_name
+
+        elif op_type == OperationType.CONTEXT_COMPRESSION.value:
+            # Parameters: agent_name, summary, fraction
+            target_agent = params.get('agent_name')
+            summary = params.get('summary')
+            fraction = params.get('fraction', 0.2)
+            
+            if not self.agent_pool:
+                raise ValueError("Operation failed: agent_pool not connected to OperationManager")
+            
+            # Use a slightly internal method or create one in AgentPool to handle this
+            self.agent_pool._apply_context_compression(target_agent, summary, fraction)
     
     def reject_operation(
         self,
@@ -361,6 +466,147 @@ Use request_id {request.request_id} to check status or respond to manager questi
         )
         
         return f"REJECTED: Manager '{approver_name}' rejected request {request_id}. Reason: {reason}"
+    
+    def delete_file(self, path: str, agent_name: str) -> str:
+        """Delete a file from the workspace."""
+        try:
+            resolved = self._resolve_path(path)
+            if not resolved.exists():
+                return f"File not found: {path}"
+            
+            owner = self.get_file_owner(str(resolved))
+            # Auto-approve if they own it or nobody owns it
+            if not owner or owner == agent_name:
+                if resolved.is_dir():
+                    import shutil
+                    shutil.rmtree(resolved)
+                else:
+                    resolved.unlink()
+                if str(resolved) in self.file_ownership:
+                    del self.file_ownership[str(resolved)]
+                return f"AUTO_APPROVED: Deleted {path}"
+            
+            # Otherwise request approval
+            return self.request_operation(
+                agent_name=agent_name,
+                operation_type=OperationType.FILE_DELETE.value,
+                parameters={'path': path},
+                description=f"Delete file {path}",
+                context=f"File is owned by '{owner}'",
+                justification="Deletion requested"
+            )
+        except Exception as e:
+            return f"Error deleting file: {str(e)}"
+
+    def copy_file(self, source: str, destination: str, agent_name: str) -> str:
+        """Copy a file or directory."""
+        try:
+            src_path = self._resolve_path(source)
+            dest_path = self._resolve_path(destination)
+            
+            if not src_path.exists():
+                return f"Source not found: {source}"
+            
+            # Copy is generally safe, but we track ownership of the NEW file
+            import shutil
+            if src_path.is_dir():
+                shutil.copytree(src_path, dest_path, dirs_exist_ok=True)
+            else:
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, dest_path)
+            
+            self.file_ownership[str(dest_path)] = agent_name
+            return f"AUTO_APPROVED: Copied {source} to {destination}"
+        except Exception as e:
+            return f"Error copying file: {str(e)}"
+
+    def move_file(self, source: str, destination: str, agent_name: str) -> str:
+        """Move a file or directory."""
+        try:
+            src_path = self._resolve_path(source)
+            dest_path = self._resolve_path(destination)
+            
+            if not src_path.exists():
+                return f"Source not found: {source}"
+            
+            owner = self.get_file_owner(str(src_path))
+            
+            # Auto-approve if they own the source
+            if not owner or owner == agent_name:
+                import shutil
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(src_path, dest_path)
+                
+                # Update ownership
+                if str(src_path) in self.file_ownership:
+                    del self.file_ownership[str(src_path)]
+                self.file_ownership[str(dest_path)] = agent_name
+                
+                return f"AUTO_APPROVED: Moved {source} to {destination}"
+            
+            # Otherwise request approval
+            return self.request_operation(
+                agent_name=agent_name,
+                operation_type=OperationType.FILE_MOVE.value,
+                parameters={'source': source, 'destination': destination},
+                description=f"Move {source} to {destination}",
+                context=f"Source is owned by '{owner}'",
+                justification="Move requested"
+            )
+        except Exception as e:
+            return f"Error moving file: {str(e)}"
+
+    def edit_file(self, path: str, agent_name: str, old_content: Optional[str] = None, new_content: Optional[str] = None, full_content: Optional[str] = None) -> str:
+        """Surgically replace or fully overwrite a file."""
+        try:
+            resolved = self._resolve_path(path)
+            
+            # Case 1: Full Overwrite (Legacy or Explicit)
+            if full_content is not None:
+                owner = self.get_file_owner(str(resolved))
+                # Check auto-approve first
+                if self._should_auto_approve(agent_name, OperationType.FILE_EDIT.value, {'path': path}):
+                    resolved.write_text(full_content, encoding='utf-8')
+                    self.file_ownership[str(resolved)] = agent_name
+                    return f"AUTO_APPROVED: Overwrote {path}"
+                
+                return self.request_operation(
+                    agent_name=agent_name,
+                    operation_type=OperationType.FILE_EDIT.value,
+                    parameters={'path': path, 'content': full_content},
+                    description=f"Overwrite file {path}",
+                    context=f"File is owned by '{owner or 'nobody'}'",
+                    justification="Full rewrite requested"
+                )
+
+            # Case 2: Surgical Edit
+            if not resolved.exists():
+                return f"File not found for surgical edit: {path}"
+            
+            content = resolved.read_text(encoding='utf-8')
+            count = content.count(old_content)
+            if count == 0:
+                return f"ERROR: Pattern not found in {path}"
+            if count > 1:
+                return f"ERROR: Pattern found {count} times in {path}. Edit requires a unique block."
+            
+            owner = self.get_file_owner(str(resolved))
+            if self._should_auto_approve(agent_name, OperationType.FILE_EDIT.value, {'path': path}):
+                new_full_content = content.replace(old_content, new_content)
+                resolved.write_text(new_full_content, encoding='utf-8')
+                self.file_ownership[str(resolved)] = agent_name
+                return f"AUTO_APPROVED: Surgically updated {path}"
+            
+            return self.request_operation(
+                agent_name=agent_name,
+                operation_type=OperationType.FILE_EDIT.value,
+                parameters={'path': path, 'old_content': old_content, 'new_content': new_content},
+                description=f"Surgical edit to {path}",
+                context=f"File is owned by '{owner}'",
+                justification="Surgical edit requested"
+            )
+        except Exception as e:
+            return f"Error editing file: {str(e)}"
     
     def request_more_info(
         self,

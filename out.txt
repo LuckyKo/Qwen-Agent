@@ -1,71 +1,364 @@
-2026-03-06 10:36:16,675 - base.py - 780 - INFO - ALL tokens: 962, Available tokens: 57542
-2026-03-06 10:36:29,991 - base.py - 780 - INFO - ALL tokens: 1050, Available tokens: 57542
-Traceback (most recent call last):
-  File "C:\Python312\Lib\site-packages\gradio\queueing.py", line 715, in process_events
-    response = await route_utils.call_process_api(
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\route_utils.py", line 322, in call_process_api
-    output = await app.get_blocks().process_api(
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\blocks.py", line 2137, in process_api
-    result = await self.call_function(
-             ^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\blocks.py", line 1675, in call_function
-    prediction = await utils.async_iteration(iterator)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 735, in async_iteration
-    return await anext(iterator)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 729, in __anext__
-    return await anyio.to_thread.run_sync(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\anyio\to_thread.py", line 56, in run_sync
-    return await get_async_backend().run_sync_in_worker_thread(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\anyio\_backends\_asyncio.py", line 2470, in run_sync_in_worker_thread
-    return await future
-           ^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\anyio\_backends\_asyncio.py", line 967, in run
-    result = context.run(func, *args)
-             ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 712, in run_sync_iterator_async
-    return next(iterator)
-           ^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 873, in gen_wrapper
-    response = next(iterator)
-               ^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\gui\web_ui.py", line 390, in agent_run
-    for responses in agent_runner.run(_history, **self.run_kwargs):
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 124, in run
-    for rsp in self._run(messages=new_messages, **kwargs):
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\agent_orchestrator.py", line 314, in _run
-    for output in output_stream:
-                  ^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 404, in _convert_messages_iterator_to_target_type
-    for messages in messages_iter:
-                    ^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 282, in _format_and_cache
-    for o in output:
-             ^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 388, in _postprocess_messages_iterator
-    for pre_msg in messages:
-                   ^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 836, in retry_model_service_iterator
-    num_retries, delay = _raise_or_delay(e, num_retries, delay, max_retries)
-                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 850, in _raise_or_delay
-    raise e
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 831, in retry_model_service_iterator
-    for rsp in it_fn():
-               ^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\oai.py", line 104, in _chat_stream
-    messages = self.convert_messages_to_dicts(messages)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\qwenvl_oai.py", line 52, in convert_messages_to_dicts
-    v = conv_multimodel_value(t, v)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\qwenvl_oai.py", line 117, in conv_multimodel_value
-    raise ModelServiceError(f'Local file "{v}" does not exist.')
-qwen_agent.llm.base.ModelServiceError: Local file "/N:/work/WD/Qwen-Agent/workspace/scr_01.png" does not exist.
+[OK] Orchestrator ready! Launching WebUI...
+Open your browser to http://127.0.0.1:7860
+==================================================
+* Running on local URL:  http://127.0.0.1:7860
+
+To create a public link, set `share=True` in `launch()`.
+2026-03-07 07:06:24,738 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,078 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,153 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,190 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,214 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,218 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,222 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,242 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,243 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,243 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,264 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,271 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,347 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,393 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,462 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:25,547 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+2026-03-07 07:06:25,618 - base.py - 49 - WARNING - Tool `web_search` already exists! Overwriting with class <class '__mp_main__.WebSearch'>.
+Initializing Agent Orchestrator...
+==================================================
+[OK] Loaded agent: coder
+2026-03-07 07:06:25,893 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:25,917 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: coder
+[OK] Loaded agent: coder
+2026-03-07 07:06:26,460 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:26,487 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: coder
+[OK] Loaded agent: coder
+2026-03-07 07:06:26,690 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:26,737 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:26,814 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: coder
+[OK] Loaded agent: coder
+[OK] Loaded agent: coder
+2026-03-07 07:06:27,075 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:27,078 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:27,090 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:27,181 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: coder
+2026-03-07 07:06:27,204 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: coder
+[OK] Loaded agent: coder
+[OK] Loaded agent: coder
+[OK] Loaded agent: coder
+2026-03-07 07:06:27,508 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:27,575 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:27,586 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:27,610 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:27,639 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:27,643 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+[OK] Loaded agent: coder
+[OK] Loaded agent: coder
+[OK] Loaded agent: coder
+2026-03-07 07:06:28,460 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:28,775 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,061 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,187 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,189 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,192 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,208 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,217 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,221 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,274 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,302 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:29,319 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:29,478 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,500 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:29,535 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:29,628 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-03-07 07:06:30,791 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:30,809 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:30,914 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:30,926 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:30,942 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:30,955 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:30,962 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:30,966 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:31,053 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:31,088 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:31,128 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:31,230 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:31,277 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:31,321 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:31,374 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:31,386 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-03-07 07:06:32,735 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:32,753 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:32,755 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:32,780 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:32,791 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:32,838 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:32,839 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:32,873 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:32,994 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:33,093 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:33,126 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:33,143 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:33,171 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:33,172 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:33,190 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:33,212 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-03-07 07:06:34,690 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:34,704 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:34,733 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+2026-03-07 07:06:34,813 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:34,817 - code_interpreter.py - 438 - INFO - Docker is available and running
+
+[OK] Orchestrator ready! Launching WebUI...
+2026-03-07 07:06:34,831 - code_interpreter.py - 438 - INFO - Docker is available and running
+Open your browser to http://127.0.0.1:7860
+==================================================
+2026-03-07 07:06:34,921 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:34,923 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:34,948 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:35,005 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:35,035 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:35,305 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:35,318 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+Open your browser to http://127.0.0.1:7860
+==================================================
+2026-03-07 07:06:35,328 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:35,336 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+Open your browser to http://127.0.0.1:7860
+==================================================
+2026-03-07 07:06:35,352 - code_interpreter.py - 438 - INFO - Docker is available and running
+* Running on local URL:  http://127.0.0.1:7861
+* Running on local URL:  http://127.0.0.1:7862
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 7862): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+
+To create a public link, set `share=True` in `launch()`.
+2026-03-07 07:06:36,820 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:36,821 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:36,823 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:36,831 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+2026-03-07 07:06:36,833 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:36,833 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:36,831 - code_interpreter.py - 438 - INFO - Docker is available and running
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+Open your browser to http://127.0.0.1:7860
+==================================================
+2026-03-07 07:06:36,838 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+==================================================
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+
+[OK] Orchestrator ready! Launching WebUI...
+Open your browser to http://127.0.0.1:7860
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+[OK] Orchestrator ready! Launching WebUI...==================================================
+
+Open your browser to http://127.0.0.1:7860
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+
+
+[OK] Orchestrator ready! Launching WebUI...Open your browser to http://127.0.0.1:7860
+==================================================
+
+Open your browser to http://127.0.0.1:7860
+
+Open your browser to http://127.0.0.1:7860
+==================================================
+Open your browser to http://127.0.0.1:7860
+==================================================
+==================================================
+==================================================
+Open your browser to http://127.0.0.1:7860
+==================================================
+
+To create a public link, set `share=True` in `launch()`.
+2026-03-07 07:06:37,388 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+Open your browser to http://127.0.0.1:7860
+==================================================
+2026-03-07 07:06:37,658 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+Open your browser to http://127.0.0.1:7860
+==================================================
+* Running on local URL:  http://127.0.0.1:7863
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 7863): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 7863): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 7863): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+* Running on local URL:  http://127.0.0.1:7864
+* Running on local URL:  http://127.0.0.1:7865
+* Running on local URL:  http://127.0.0.1:7866
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 7866): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+2026-03-07 07:06:38,092 - code_interpreter.py - 438 - INFO - Docker is available and running
+2026-03-07 07:06:38,094 - code_interpreter.py - 438 - INFO - Docker is available and running
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+Open your browser to http://127.0.0.1:7860
+==================================================
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+2026-03-07 07:06:38,116 - code_interpreter.py - 438 - INFO - Docker is available and running
+Open your browser to http://127.0.0.1:7860
+==================================================
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Writer']
+==================================================
+
+[OK] Orchestrator ready! Launching WebUI...
+Open your browser to http://127.0.0.1:7860
+==================================================
+* Running on local URL:  http://127.0.0.1:7867
+* Running on local URL:  http://127.0.0.1:7868
+
+To create a public link, set `share=True` in `launch()`.
+* Running on local URL:  http://127.0.0.1:7869
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 7869): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+
+To create a public link, set `share=True` in `launch()`.
+* Running on local URL:  http://127.0.0.1:7870
+
+To create a public link, set `share=True` in `launch()`.
+
+To create a public link, set `share=True` in `launch()`.
+
+To create a public link, set `share=True` in `launch()`.
+
+To create a public link, set `share=True` in `launch()`.
+
+To create a public link, set `share=True` in `launch()`.
+
+To create a public link, set `share=True` in `launch()`.
+* Running on local URL:  http://127.0.0.1:7871
+
+To create a public link, set `share=True` in `launch()`.
+* Running on local URL:  http://127.0.0.1:7872
+* Running on local URL:  http://127.0.0.1:7873
+* Running on local URL:  http://127.0.0.1:7874
+* Running on local URL:  http://127.0.0.1:7875
+
+To create a public link, set `share=True` in `launch()`.
+
+To create a public link, set `share=True` in `launch()`.
+
+To create a public link, set `share=True` in `launch()`.
+
+To create a public link, set `share=True` in `launch()`.
+* Running on local URL:  http://127.0.0.1:7876
+
+To create a public link, set `share=True` in `launch()`.

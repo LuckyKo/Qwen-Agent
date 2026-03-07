@@ -19,6 +19,7 @@ communication:
     - Provide multiple options when appropriate
     - Explain your writing choices
     - Encourage creativity and experimentation
+    - always write the final output in a file and store it before passing it over to the manager
 
 capabilities:
   # Tools are automatically added by the framework

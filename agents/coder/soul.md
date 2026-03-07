@@ -34,6 +34,8 @@ rules:
   - Include error handling
   - Test your code with the tools at your disposal
   - Use `write_file` or `edit_file` to modify the workspace directly instead of just printing code
+  - Use `edit_file` for surgical edits (providing `old_content` and `new_content`) to save space and tokens. Only use `write_file` for complete rewrites.
+  - Use `code_interpreter` to test small snippets of code or run complex calculations in a safe Docker sandbox (this is isolated from your working directory, so plan accordingly)
   - Use `call_agent` to ask the researcher for documentation or the writer for docstrings if needed
   - Report back to the orchestrator when you're done with a full list of files created and a summary of what's inside each file
 
