@@ -7,10 +7,9 @@ Each sub-agent has its own:
 - Specialized tools
 - Domain expertise
 
-File Permission System:
+User Approval System:
 - Reads: Free access
-- Writes to new/owned files: Auto-approved  
-- Writes to others' files: Requires manager approval
+- All mutating operations: Block until user approves/rejects via WebUI
 
 The Orchestrator is also a launchable agent with its own soul.md!
 """
@@ -87,27 +86,23 @@ llm_cfg = {
 # All tools will be available in UI, but only these will be enabled by default
 DEFAULT_TOOLS = {
     'orchestrator': [
-        'call_agent', 'continue_with_agent', 'dismiss_agent',
-        'approve_operation', 'reject_operation', 'ask_agent', 'respond_to_manager',
-        'list_pending_operations', 'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'read_file', 'view_image', 'list_dir', 'grep',
+        'call_agent', 'dismiss_agent',
+        'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'read_file', 'view_image', 'list_dir', 'grep',
         'ddg_search', 'web_extractor'
     ],
     'coder': [
-        'call_agent', 'continue_with_agent', 'dismiss_agent',
-        'approve_operation', 'reject_operation', 'ask_agent', 'respond_to_manager',
+        'call_agent', 'dismiss_agent',
         'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'list_dir', 'grep', 'code_interpreter',
         'ddg_search', 'web_extractor'
     ],
     'researcher': [
-        'call_agent', 'continue_with_agent', 'dismiss_agent',
-        'approve_operation', 'reject_operation', 'ask_agent', 'respond_to_manager',
+        'call_agent', 'dismiss_agent',
         'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'list_dir', 'grep', 'code_interpreter',
         'ddg_search', 'web_extractor',
         'doc_parser', 'simple_doc_parser', 'extract_doc_vocabulary'
     ],
     'writer': [
-        'call_agent', 'continue_with_agent', 'dismiss_agent',
-        'approve_operation', 'reject_operation', 'ask_agent', 'respond_to_manager',
+        'call_agent', 'dismiss_agent',
         'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'list_dir',
         'ddg_search', 'web_extractor',
         'doc_parser', 'simple_doc_parser'
@@ -117,7 +112,7 @@ DEFAULT_TOOLS = {
 # Tools available to ALL agents (shown in UI but disabled by default)
 ALL_BUILTIN_TOOLS = [
     'image_gen', 'storage', 'amap_weather', 'code_interpreter', 'python_executor',
-    'delete_file', 'respond_to_manager'  # These are powerful - enable manually
+    'delete_file',  # These are powerful - enable manually
 ]
 
 
@@ -208,12 +203,6 @@ if __name__ == '__main__':
     if 'extract_doc_vocabulary' in default_orch_tools:
         orchestrator.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary()
 
-    if 'amap_weather' in default_orch_tools:
-        try:
-            orchestrator.function_map['amap_weather'] = amap_weather.AmapWeather()
-        except Exception:
-            pass
-
     if 'code_interpreter' in default_orch_tools:
         try:
             orchestrator.function_map['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': 'workspace'})
@@ -243,7 +232,6 @@ if __name__ == '__main__':
         'prompt.suggestions': [
             'Have the coder create a Python script',
             'Research quantum computing and write a report',
-            'List all pending operations',
             'Show me the workspace files',
         ],
         'user.name': 'You',

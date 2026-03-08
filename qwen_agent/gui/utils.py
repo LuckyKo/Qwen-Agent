@@ -66,6 +66,7 @@ def convert_history_to_chatbot(messages):
 
 def convert_fncall_to_text(messages: List[Dict]) -> List[Dict]:
     new_messages = []
+    last_was_function = False
 
     for msg in messages:
         role, content, reasoning_content, name = msg[ROLE], msg[CONTENT], msg.get(REASONING_CONTENT,
@@ -127,15 +128,20 @@ def convert_fncall_to_text(messages: List[Dict]) -> List[Dict]:
                 f_name = fn_call['name']
                 f_args = fn_call['arguments']
                 content += TOOL_CALL.format(tool_name=f_name, tool_input=f_args)
-            if len(new_messages) > 0 and new_messages[-1][ROLE] == ASSISTANT and new_messages[-1][NAME] == name:
+            
+            # If the previous message was a function result, start a new bubble
+            # even if the role is the same.
+            if len(new_messages) > 0 and new_messages[-1][ROLE] == ASSISTANT and new_messages[-1][NAME] == name and not last_was_function:
                 new_messages[-1][CONTENT] += content
             else:
                 new_messages.append({ROLE: role, CONTENT: content, NAME: name})
+            last_was_function = False
 
         # if role is function, append the message and add function result and exit details
         elif role == FUNCTION:
             assert new_messages[-1][ROLE] == ASSISTANT
             new_messages[-1][CONTENT] += TOOL_OUTPUT.format(tool_output=content)
+            last_was_function = True
 
         # if role is not system, user, assistant or function, raise TypeError
         else:

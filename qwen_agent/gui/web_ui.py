@@ -24,7 +24,7 @@ from qwen_agent.agents.user_agent import PENDING_USER_INPUT
 from qwen_agent.tools import TOOL_REGISTRY
 from qwen_agent.gui.gradio_utils import format_cover_html
 from qwen_agent.gui.utils import convert_fncall_to_text, convert_history_to_chatbot, get_avatar_image
-from qwen_agent.llm.schema import ASSISTANT, AUDIO, CONTENT, FILE, IMAGE, NAME, ROLE, USER, VIDEO, Message
+from qwen_agent.llm.schema import ASSISTANT, AUDIO, CONTENT, FILE, IMAGE, NAME, ROLE, SYSTEM, USER, VIDEO, Message
 from qwen_agent.log import logger
 from qwen_agent.utils.utils import print_traceback
 
@@ -208,6 +208,14 @@ class WebUI:
                         else:
                             agent_selector = gr.State(0)
 
+                        session_name = gr.Textbox(
+                            label='Session Name',
+                            placeholder='Enter session identifier (e.g. CoderSession)',
+                            value='MainSession',
+                            interactive=True,
+                            elem_id="session_name_input"
+                        )
+
                         agent_info_block = self._create_agent_info_block()
 
                         if self.prompt_suggestions:
@@ -217,7 +225,7 @@ class WebUI:
                                 inputs=[input],
                             )
                         
-                        # --- User Approval Panel ---
+                        # --- User Approval Panel (polls for blocking approvals) ---
                         with gr.Accordion("🛡️ Pending Approvals", open=True, visible=False, elem_id="approval_panel") as approval_accordion:
                             approval_id_list = gr.Dropdown(
                                 label="Select Request",
@@ -228,7 +236,14 @@ class WebUI:
                             with gr.Row():
                                 approve_btn = gr.Button("✅ Approve", variant="primary")
                                 reject_btn = gr.Button("❌ Reject", variant="stop")
-                            refresh_approvals_btn = gr.Button("🔄 Refresh List")
+                            reject_reason_input = gr.Textbox(
+                                label="Rejection reason (required)",
+                                placeholder="Why are you rejecting this operation?",
+                                visible=False,
+                                lines=2,
+                            )
+                            # Timer to poll for pending approvals every 1 second
+                            approval_timer = gr.Timer(value=1, active=True)
                         
                         agent_plugins_block = self._create_agent_plugins_block()
 
@@ -278,46 +293,41 @@ class WebUI:
                         # Multiple agents but mention disabled - still pass agent_selector
                         input_promise = input_promise.then(
                             self.agent_run,
-                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
+                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status, session_name],
                             [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
                         )
                     else:
                         input_promise = input_promise.then(
                             self.agent_run,
-                            [chatbot, history],
+                            [chatbot, history, session_name],
                             [chatbot, history],
                         )
-
-                    # Refresh approvals after agent finishes
-                    input_promise = input_promise.then(
-                        self._update_approval_list,
-                        outputs=[approval_id_list, approval_details, approval_accordion]
-                    )
 
                     input_promise.then(self.flushed, None, [input])
 
                     # --- Event Handlers for Approvals ---
+                    # Timer-based polling for pending approvals
+                    approval_timer.tick(
+                        fn=self._update_approval_list,
+                        outputs=[approval_id_list, approval_details, approval_accordion]
+                    )
+
                     approval_id_list.change(
                         fn=self._update_approval_details,
                         inputs=[approval_id_list],
-                        outputs=[approval_details]
+                        outputs=[approval_details, reject_reason_input]
                     )
-                    
+
                     approve_btn.click(
-                        fn=self._handle_approval_action,
-                        inputs=[approval_id_list, gr.State("approve")],
+                        fn=self._handle_approve,
+                        inputs=[approval_id_list],
                         outputs=[approval_id_list, approval_details, approval_accordion]
                     )
-                    
+
                     reject_btn.click(
-                        fn=self._handle_approval_action,
-                        inputs=[approval_id_list, gr.State("reject")],
-                        outputs=[approval_id_list, approval_details, approval_accordion]
-                    )
-                    
-                    refresh_approvals_btn.click(
-                        fn=self._update_approval_list,
-                        outputs=[approval_id_list, approval_details, approval_accordion]
+                        fn=self._handle_reject,
+                        inputs=[approval_id_list, reject_reason_input],
+                        outputs=[approval_id_list, approval_details, approval_accordion, reject_reason_input]
                     )
 
                     # --- Event Handlers for Stop/Retry/Reset ---
@@ -499,11 +509,8 @@ class WebUI:
             agent = self.agent_list[_agent_selector]
             _agent_pool = getattr(agent, 'agent_pool', None)
             if _agent_pool:
-                # Clear all sub-agent histories in the pool
-                for sa_name in list(_agent_pool.agent_conversations.keys()):
-                    _agent_pool.clear_conversation(sa_name)
-                # Clear live UI state
-                _agent_pool.sub_agent_state = {}
+                # Full reset of all sub-agent instances and loggers in the pool
+                _agent_pool.reset()
 
         return _chatbot, _history, _sub_chatbot, _sub_status
 
@@ -537,10 +544,14 @@ class WebUI:
         # Re-run the generation
         yield from self.agent_run(_chatbot, _history, _agent_selector, _sub_chatbot, _sub_status)
 
-    def agent_run(self, _chatbot, _history, _agent_selector=None, _sub_chatbot=None, _sub_status=None):
+    def agent_run(self, _chatbot, _history, _agent_selector=None, _sub_chatbot=None, _sub_status=None, _session_name="MainSession"):
         if self.verbose:
             logger.info('agent_run input:\n' + pprint.pformat(_history, indent=2))
 
+        # Capture expected structure at the start to ensure stable yield lengths
+        has_sub = (_sub_chatbot is not None)
+        has_selector = (_agent_selector is not None)
+        
         num_input_bubbles = len(_chatbot) - 1
         num_output_bubbles = 1
         _chatbot[-1][1] = [None for _ in range(len(self.agent_list))]
@@ -549,30 +560,44 @@ class WebUI:
         if self.agent_hub:
             agent_runner = self.agent_hub
         
+        # Apply session name if it's an Orchestrator
+        if hasattr(agent_runner, 'session_name'):
+            agent_runner.session_name = _session_name
+        
         # Reset stop flag for new run
         _agent_pool = getattr(agent_runner, 'agent_pool', None)
         if _agent_pool:
             _agent_pool.stopped = False
         
         # Initialize sub-agent chat if we have a sub-chatbot
-        if _sub_chatbot is not None:
+        if has_sub:
             _sub_chatbot = _sub_chatbot or []
             _sub_chatbot.append([None, f"🚀 {agent_runner.name} is working..."])
             if _sub_status:
                 _sub_status = "Agent thinking..."
         
-        # Track previously processed response count and sub-chatbot length 
-        # to avoid re-processing old messages and spamming Gradio with unchanged state
+        # Track previously processed response count
         _prev_rsp_count = 0
-        _prev_sub_len = len(_sub_chatbot) if _sub_chatbot is not None else 0
+        agent_index = _agent_selector or 0
         
         responses = []
+        from qwen_agent.gui.gradio_dep import gr
+        
+        main_label = f"Main Chat: {agent_runner.__class__.__name__}"
+        if hasattr(agent_runner, 'session_name'):
+            main_label += f" ({agent_runner.session_name})"
+        elif hasattr(agent_runner, 'name'):
+            main_label += f" ({agent_runner.name})"
+            
+        sub_label_base = "🔄 Sub-Agent Activity"
+        sub_label = sub_label_base
+
         for responses in agent_runner.run(_history, **self.run_kwargs):
             if not responses:
                 continue
             if responses[-1][CONTENT] == PENDING_USER_INPUT:
                 logger.info('Interrupted. Waiting for user input!')
-                if _sub_chatbot is not None:
+                if has_sub:
                     _sub_chatbot.append([None, "⏳ Waiting for your input..."])
                 break
 
@@ -583,13 +608,13 @@ class WebUI:
                 continue
 
             # Update sub-agent panel from agent_pool streaming state
-            if _sub_chatbot is not None:
+            if has_sub:
                 # Try to read live streaming state from OrchestratorAgent's agent_pool
                 _agent_pool = getattr(agent_runner, 'agent_pool', None)
                 if _agent_pool and hasattr(_agent_pool, 'sub_agent_state'):
                     new_sub_chatbot = []
                     
-                    # Find the deeply active sub-agent (the last one marked active, or the most recent)
+                    # Find the deeply active sub-agent
                     active_sa_name = None
                     active_sa_state = None
                     for sa_name, sa_state in _agent_pool.sub_agent_state.items():
@@ -597,20 +622,14 @@ class WebUI:
                             active_sa_name = sa_name
                             active_sa_state = sa_state
                     
-                    # If none are currently 'active' (e.g. they just finished), show the very last one
-                    if not active_sa_name and _agent_pool.sub_agent_state:
-                        active_sa_name, active_sa_state = list(_agent_pool.sub_agent_state.items())[-1]
-                        
                     if active_sa_name and active_sa_state:
+                        # Display sub-agent identity in label
+                        sub_label = f"Sub-Agent: {active_sa_state.get('agent_name', active_sa_name)}"
                         messages = active_sa_state.get('messages', [])
                         if messages:
-                            # Apply identical formatting as main chat
                             formatted_msgs = convert_fncall_to_text(messages)
-                            
-                            # Add a header for the specific sub-agent
                             new_sub_chatbot.append([f"🤝 Conversation with **{active_sa_name}**", None])
                             
-                            # Convert messages to Chatbot [[user, assistant], ...] format
                             current_pair = [None, None]
                             for msg in formatted_msgs:
                                 role = msg.get('role')
@@ -633,7 +652,7 @@ class WebUI:
 
                     _sub_chatbot = new_sub_chatbot
                 else:
-                    # Fallback for non-OrchestratorAgent: show main agent tool calls
+                    # Fallback for non-OrchestratorAgent
                     new_responses = responses[_prev_rsp_count:]
                     for rsp in new_responses:
                         role = rsp.get('role', '')
@@ -652,7 +671,6 @@ class WebUI:
                 _prev_rsp_count = len(responses)
 
             while len(display_responses) > num_output_bubbles:
-                # Create a new chat bubble
                 _chatbot.append([None, None])
                 _chatbot[-1][1] = [None for _ in range(len(self.agent_list))]
                 num_output_bubbles += 1
@@ -662,52 +680,67 @@ class WebUI:
 
             for i, rsp in enumerate(display_responses):
                 agent_index = self._get_agent_index_by_name(rsp[NAME])
-                # Sanitize content to prevent UI crashes on directory links
                 sanitized_content = self._sanitize_content(rsp[CONTENT])
                 _chatbot[num_input_bubbles + i][1][agent_index] = sanitized_content
 
-            if len(self.agent_list) > 1:
+            if has_selector:
                 _agent_selector = agent_index
 
-            # Sanitize sub-chatbot content if it exists
-            if _sub_chatbot is not None:
+            # Sanitize sub-chatbot content
+            if has_sub:
                 for bubble in _sub_chatbot:
                     if bubble[0]:
                         bubble[0] = self._sanitize_content(bubble[0])
                     if bubble[1]:
                         bubble[1] = self._sanitize_content(bubble[1])
 
-            # Yield with sub-chatbot updates
-            if _sub_chatbot is not None:
-                if _agent_selector is not None:
-                    yield _chatbot, _history, _agent_selector, _sub_chatbot, _sub_status
+            # Stable Yield based on initial parameters
+            if has_sub:
+                if has_selector:
+                    yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector, gr.update(value=_sub_chatbot, label=sub_label), _sub_status
                 else:
-                    yield _chatbot, _history, _sub_chatbot, _sub_status
+                    yield gr.update(value=_chatbot, label=main_label), _history, gr.update(value=_sub_chatbot, label=sub_label), _sub_status
             else:
-                if _agent_selector is not None:
-                    yield _chatbot, _history, _agent_selector
+                if has_selector:
+                    yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector
                 else:
-                    yield _chatbot, _history
+                    yield gr.update(value=_chatbot, label=main_label), _history
 
         if responses:
             _history.extend([res for res in responses if res[CONTENT] != PENDING_USER_INPUT])
 
+        # Check if the Orchestrator's internal messages array was compressed mid-turn
+        if hasattr(agent_runner, 'turn_final_messages') and agent_runner.turn_final_messages:
+            if len(agent_runner.turn_final_messages) < len(_history):
+                logger.info("Orchestrator history was compressed. Syncing WebUI history.")
+                _history.clear()
+                for res in agent_runner.turn_final_messages:
+                    msg = res.model_dump() if not isinstance(res, dict) else res
+                    # Strip system messages — agent.py:run() dynamically prepends
+                    # the system message on every turn, and the compression summary
+                    # is already merged into the AgentPool history's system message.
+                    if msg.get(ROLE) == SYSTEM:
+                        continue
+                    _history.append(msg)
+            # Clear so it doesn't carry over
+            agent_runner.turn_final_messages = None
         # Final update to sub-agent chat
-        if _sub_chatbot is not None:
+        if has_sub:
             _sub_chatbot.append([None, f"✅ {agent_runner.name} completed!"])
             if _sub_status:
                 _sub_status = "Ready"
 
-        if _sub_chatbot is not None:
-            if _agent_selector is not None:
-                yield _chatbot, _history, _agent_selector, _sub_chatbot, _sub_status
+        # Stable Final Yield
+        if has_sub:
+            if has_selector:
+                yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector, gr.update(value=_sub_chatbot, label=sub_label_base), _sub_status
             else:
-                yield _chatbot, _history, _sub_chatbot, _sub_status
+                yield gr.update(value=_chatbot, label=main_label), _history, gr.update(value=_sub_chatbot, label=sub_label_base), _sub_status
         else:
-            if _agent_selector is not None:
-                yield _chatbot, _history, _agent_selector
+            if has_selector:
+                yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector
             else:
-                yield _chatbot, _history
+                yield gr.update(value=_chatbot, label=main_label), _history
 
         if self.verbose:
             logger.info('agent_run response:\n' + pprint.pformat(responses, indent=2))
@@ -769,72 +802,91 @@ class WebUI:
 
     def _get_operation_manager(self):
         """Find the OperationManager from the agent pool."""
-        # The first agent usually has access to the agent_pool
         for agent in self.agent_list:
             if hasattr(agent, 'agent_pool') and agent.agent_pool:
                 return agent.agent_pool.operation_manager
         return None
 
     def _update_approval_list(self):
-        """Fetch pending operations and update the dropdown and accordion visibility."""
+        """Poll for pending approvals and update the UI."""
         from qwen_agent.gui.gradio_dep import gr
         manager = self._get_operation_manager()
         if not manager:
-            return gr.update(choices=[], value=None), "Error: OperationManager not found.", gr.update(visible=False)
-        
-        pending = manager.list_pending_operations()
-        choices = [(f"{op['agent_name']}: {op['description']} ({op['request_id']})", op['request_id']) for op in pending]
-        
+            return gr.update(choices=[], value=None), "No approval system.", gr.update(visible=False)
+
+        pending = manager.list_pending_approvals()
+        choices = [
+            (f"⏳ {op['agent_name']}: {op['tool_name']} - {op['description']}", op['request_id'])
+            for op in pending
+        ]
+
         if not choices:
             return gr.update(choices=[], value=None), "No pending requests.", gr.update(visible=False, open=False)
-        
-        return gr.update(choices=choices), gr.update(), gr.update(visible=True, open=True)
+
+        # Auto-select first if only one
+        first_id = choices[0][1] if len(choices) == 1 else None
+        return gr.update(choices=choices, value=first_id), gr.update(), gr.update(visible=True, open=True)
 
     def _update_approval_details(self, request_id):
-        """Show details for a specific request."""
+        """Show details for a specific pending approval."""
         from qwen_agent.gui.gradio_dep import gr
         if not request_id:
-            return "Select a request to see details."
-        
-        manager = self._get_operation_manager()
-        status_info = manager.get_operation_status(request_id)
-        if not status_info:
-            return f"Error: Request {request_id} not found."
-        
-        req = status_info['request']
-        details = f"### Request: {request_id}\n"
-        details += f"**Agent:** {req['agent_name']}\n"
-        details += f"**Action:** {req['operation_type']}\n"
-        details += f"**Description:** {req['description']}\n"
-        details += f"**Justification:** {req.get('justification', 'None provided')}\n\n"
-        details += "**Parameters:**\n"
-        details += f"```json\n{json.dumps(req['parameters'], indent=2)}\n```\n"
-        
-        if req.get('context'):
-            details += f"**Context:** {req['context']}\n"
-            
-        return details
+            return "Select a request to see details.", gr.update(visible=False)
 
-    def _handle_approval_action(self, request_id, action):
-        """Approve or Reject a request from the UI."""
-        from qwen_agent.gui.gradio_dep import gr
-        if not request_id:
-            return gr.update(), "No request selected."
-            
         manager = self._get_operation_manager()
         if not manager:
-            return gr.update(), "Error: OperationManager not found."
-            
-        if action == "approve":
-            result = manager.approve_operation(request_id, approver_name="User")
-        else:
-            result = manager.reject_operation(request_id, approver_name="User", reason="Rejected by User via UI")
-            
-        # Refresh the list and update accordion
+            return "Error: OperationManager not found.", gr.update(visible=False)
+
+        # Find the pending approval
+        pending = manager.list_pending_approvals()
+        req = None
+        for p in pending:
+            if p['request_id'] == request_id:
+                req = p
+                break
+
+        if not req:
+            return f"Request {request_id} not found or already resolved.", gr.update(visible=False)
+
+        details = f"### 🛡️ Approval Required\n\n"
+        details += f"**Agent:** `{req['agent_name']}`\n\n"
+        details += f"**Tool:** `{req['tool_name']}`\n\n"
+        details += f"**Description:** {req['description']}\n\n"
+        details += "**Parameters:**\n"
+        details += f"```json\n{json.dumps(req['tool_args'], indent=2)}\n```\n"
+
+        return details, gr.update(visible=True)
+
+    def _handle_approve(self, request_id):
+        """User approves a pending operation."""
+        from qwen_agent.gui.gradio_dep import gr
+        if not request_id:
+            return gr.update(), "No request selected.", gr.update()
+
+        manager = self._get_operation_manager()
+        if not manager:
+            return gr.update(), "Error: OperationManager not found.", gr.update()
+
+        result = manager.user_approve(request_id)
+
+        # Refresh the list
+        return self._update_approval_list()
+
+    def _handle_reject(self, request_id, reason):
+        """User rejects a pending operation with a reason."""
+        from qwen_agent.gui.gradio_dep import gr
+        if not request_id:
+            return gr.update(), "No request selected.", gr.update(), gr.update()
+
+        if not reason or not reason.strip():
+            return gr.update(), "⚠️ **Please provide a reason for rejection.**", gr.update(), gr.update()
+
+        manager = self._get_operation_manager()
+        if not manager:
+            return gr.update(), "Error: OperationManager not found.", gr.update(), gr.update()
+
+        result = manager.user_reject(request_id, reason.strip())
+
+        # Refresh the list and clear the reason input
         choices_update, details_update, accordion_update = self._update_approval_list()
-        
-        # If the result was an error (like failed execution), show it in details
-        if "ERROR" in result or "FAILED" in result:
-            return choices_update, result, accordion_update
-            
-        return choices_update, f"Last Action: {result}", accordion_update
+        return choices_update, details_update, accordion_update, gr.update(value="", visible=False)

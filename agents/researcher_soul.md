@@ -18,7 +18,7 @@ communication:
     - Always cite sources when available
     - Break down complex topics step by step
     - Use technical terms when appropriate
-    - Summarize key findings clearly and concisely, store them in a file before passing it over to the manager
+    - Summarize key findings clearly and concisely at the end of your session. Your text output is automatically fed back to your supervisor.
 
 capabilities:
   skills:

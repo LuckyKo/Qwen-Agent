@@ -449,10 +449,12 @@ def save_audio_to_file(base_64: str, file_name: str):
 
 
 def extract_text_from_message(
-    msg: Message,
+    msg: Union[Message, dict],
     add_upload_info: bool,
     lang: Literal['auto', 'en', 'zh'] = 'auto',
 ) -> str:
+    if isinstance(msg, dict):
+        msg = Message(**msg)
     if isinstance(msg.content, list):
         text = format_as_text_message(msg, add_upload_info=add_upload_info, lang=lang).content
     elif isinstance(msg.content, str):

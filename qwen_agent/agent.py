@@ -189,6 +189,10 @@ class Agent(ABC):
             return f'Tool {tool_name} does not exists.'
         tool = self.function_map[tool_name]
         try:
+            # Pass the agent itself as agent_obj so tools (like compress_context) 
+            # can sync back to its base system_message for persistence across turns.
+            if 'agent_obj' not in kwargs:
+                kwargs['agent_obj'] = self
             tool_result = tool.call(tool_args, **kwargs)
         except (ToolServiceError, DocParserError) as ex:
             raise ex

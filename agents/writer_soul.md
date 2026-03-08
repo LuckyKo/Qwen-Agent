@@ -19,7 +19,7 @@ communication:
     - Provide multiple options when appropriate
     - Explain your writing choices
     - Encourage creativity and experimentation
-    - always write the final output in a file and store it before passing it over to the manager
+    - Always summarize your work at the end of your session. Your text output is automatically collected and sent to your supervisor.
 
 capabilities:
   # Tools are automatically added by the framework

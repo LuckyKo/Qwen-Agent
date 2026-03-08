@@ -1,11 +1,11 @@
 import json
 from pathlib import Path
 from qwen_agent.tools.base import BaseTool
-from operation_manager import OperationType
+
 
 class ReadFile(BaseTool):
     """Read a file from the workspace (free access - no approval needed)."""
-    
+
     name = 'read_file'
     description = 'Read content from a file in the workspace. Supports pagination via line numbers.'
     parameters = {
@@ -28,7 +28,7 @@ class ReadFile(BaseTool):
         },
         'required': ['path'],
     }
-    
+
     def __init__(self, cfg=None, **kwargs):
         try:
             super().__init__(cfg)
@@ -36,50 +36,49 @@ class ReadFile(BaseTool):
             super().__init__()
         self.agent_pool = kwargs.get('agent_pool')
         self.agent_name = kwargs.get('agent_name')
-    
+
     def call(self, params: str, **kwargs) -> str:
         params = self._verify_json_format_args(params)
         path = params['path']
         start_line = params.get('start_line', 1)
         limit = params.get('limit', 1000)
-        
+
         if hasattr(self, 'agent_pool') and self.agent_pool:
             base_dir = self.agent_pool.operation_manager.base_dir
         else:
             base_dir = Path('workspace')
-        
+
         try:
             resolved = (base_dir / path).resolve()
             if not resolved.exists():
                 return f"File not found: {path}"
-            
+
             with open(resolved, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-            
+
             total_lines = len(lines)
             start_idx = max(0, start_line - 1)
             end_idx = min(total_lines, start_idx + limit)
-            
+
             subset = lines[start_idx:end_idx]
             content = "".join([f"{i+start_idx+1}: {line}" for i, line in enumerate(subset)])
-            
+
             header = f"File content ({path}), lines {start_idx+1} to {end_idx} of {total_lines}:"
             if end_idx < total_lines:
                 header += f" [TRUNCATED - see note at bottom for more]"
-            
+
             msg = f"{header}\n```\n{content}\n```"
             if end_idx < total_lines:
                 msg += f"\n\n[PAGINATION NOTE: This file is large. Use read_file with start_line={end_idx+1} to read the next {min(limit, total_lines - end_idx)} lines.]"
-            
-            return msg
-            
+
             return msg
         except Exception as e:
             return f"Error reading file: {str(e)}"
 
+
 class ViewImage(BaseTool):
     """View an image file from the workspace."""
-    
+
     name = 'view_image'
     description = 'View an image file in the workspace. Returns the image for the model to see.'
     parameters = {
@@ -92,32 +91,31 @@ class ViewImage(BaseTool):
         },
         'required': ['path'],
     }
-    
+
     def __init__(self, cfg=None, **kwargs):
         try:
             super().__init__(cfg)
         except (ValueError, TypeError):
             super().__init__()
         self.agent_pool = kwargs.get('agent_pool')
-    
+
     def call(self, params: str, **kwargs):
         from qwen_agent.llm.schema import ContentItem
         params = self._verify_json_format_args(params)
         path = params['path']
-        
+
         if hasattr(self, 'agent_pool') and self.agent_pool:
             base_dir = self.agent_pool.operation_manager.base_dir
         else:
             base_dir = Path('workspace')
-            
+
         try:
             resolved = (base_dir / path).resolve()
             if not resolved.exists():
                 return f"Image not found: {path}"
-            
-            # Use file protocol for local files
+
             file_url = resolved.as_uri()
-            
+
             return [
                 ContentItem(image=file_url),
                 ContentItem(text=f"Viewing image: {path}")
@@ -125,11 +123,12 @@ class ViewImage(BaseTool):
         except Exception as e:
             return f"Error viewing image: {str(e)}"
 
+
 class WriteFile(BaseTool):
-    """Create a new file in the workspace (auto-approved for new files)."""
-    
+    """Create a new file in the workspace (requires user approval)."""
+
     name = 'write_file'
-    description = 'Create a NEW file in the workspace. Auto-approved. To edit existing files, use edit_file instead.'
+    description = 'Create a NEW file in the workspace. Requires user approval. To edit existing files, use edit_file instead.'
     parameters = {
         'type': 'object',
         'properties': {
@@ -143,12 +142,12 @@ class WriteFile(BaseTool):
             },
             'justification': {
                 'type': 'string',
-                'description': 'Why you need to create this file (helps manager decide)'
+                'description': 'Why you need to create this file'
             }
         },
         'required': ['path', 'content'],
     }
-    
+
     def __init__(self, cfg=None, **kwargs):
         try:
             super().__init__(cfg)
@@ -156,27 +155,24 @@ class WriteFile(BaseTool):
             super().__init__()
         self.agent_pool = kwargs.get('agent_pool')
         self.agent_name = kwargs.get('agent_name')
-    
+
     def call(self, params: str, **kwargs) -> str:
         params = self._verify_json_format_args(params)
         path = params['path']
         content = params['content']
-        
-        try:
-            resolved = (self.agent_pool.operation_manager.base_dir / path).resolve()
-            resolved.parent.mkdir(parents=True, exist_ok=True)
-            resolved.write_text(content, encoding='utf-8')
-            
-            self.agent_pool.operation_manager.file_ownership[str(resolved)] = self.agent_name
-            return f"AUTO_APPROVED: Created {path} ({len(content)} characters)"
-        except Exception as e:
-            return f"ERROR: {str(e)}"
+
+        return self.agent_pool.operation_manager.write_file(
+            path=path,
+            content=content,
+            agent_name=self.agent_name,
+        )
+
 
 class EditFile(BaseTool):
-    """Edit an existing file (requests manager approval if not owner)."""
-    
+    """Edit an existing file (requires user approval)."""
+
     name = 'edit_file'
-    description = 'Edit an EXISTING file. Auto-approved if you own it, otherwise requests manager approval with conversation support.'
+    description = 'Edit an EXISTING file. Requires user approval before changes are applied.'
     parameters = {
         'type': 'object',
         'properties': {
@@ -203,7 +199,7 @@ class EditFile(BaseTool):
         },
         'required': ['path', 'justification'],
     }
-    
+
     def __init__(self, cfg=None, **kwargs):
         try:
             super().__init__(cfg)
@@ -211,29 +207,30 @@ class EditFile(BaseTool):
             super().__init__()
         self.agent_pool = kwargs.get('agent_pool')
         self.agent_name = kwargs.get('agent_name')
-    
+
     def call(self, params: str, **kwargs) -> str:
         params = self._verify_json_format_args(params)
         path = params['path']
         old_content = params.get('old_content')
         new_content = params.get('new_content')
         full_content = params.get('full_content')
-        
+
         # Backward compatibility for models that still send 'content' instead of old/new
         if 'content' in params and not old_content:
             full_content = params['content']
-            
+
         return self.agent_pool.operation_manager.edit_file(
             path=path,
             agent_name=self.agent_name,
             old_content=old_content,
             new_content=new_content,
-            full_content=full_content
+            full_content=full_content,
         )
+
 
 class ListDir(BaseTool):
     """List contents of a directory in the workspace."""
-    
+
     name = 'list_dir'
     description = 'List all files and directories in a given path. Like `ls` or `dir` command.'
     parameters = {
@@ -246,22 +243,23 @@ class ListDir(BaseTool):
         },
         'required': [],
     }
-    
+
     def __init__(self, cfg=None, **kwargs):
         try:
             super().__init__(cfg)
         except (ValueError, TypeError):
             super().__init__()
         self.agent_pool = kwargs.get('agent_pool')
-    
+
     def call(self, params: str, **kwargs) -> str:
         params = self._verify_json_format_args(params)
         path = params.get('path', '.')
         return self.agent_pool.operation_manager.list_directory(path)
 
+
 class Grep(BaseTool):
     """Search for text patterns in files."""
-    
+
     name = 'grep'
     description = 'Search for a text pattern in files (supports regex). Like the grep command.'
     parameters = {
@@ -282,14 +280,14 @@ class Grep(BaseTool):
         },
         'required': ['pattern'],
     }
-    
+
     def __init__(self, cfg=None, **kwargs):
         try:
             super().__init__(cfg)
         except (ValueError, TypeError):
             super().__init__()
         self.agent_pool = kwargs.get('agent_pool')
-    
+
     def call(self, params: str, **kwargs) -> str:
         params = self._verify_json_format_args(params)
         pattern = params['pattern']
@@ -297,11 +295,12 @@ class Grep(BaseTool):
         include = params.get('include', '*')
         return self.agent_pool.operation_manager.grep(pattern, path, include)
 
+
 class DeleteFile(BaseTool):
-    """Delete a file (auto-approved if you own it, otherwise needs manager approval)."""
-    
+    """Delete a file (requires user approval)."""
+
     name = 'delete_file'
-    description = 'Delete a file. Auto-approved if you own it or it has no owner, otherwise needs manager approval.'
+    description = 'Delete a file. Requires user approval before deletion.'
     parameters = {
         'type': 'object',
         'properties': {
@@ -312,7 +311,7 @@ class DeleteFile(BaseTool):
         },
         'required': ['path'],
     }
-    
+
     def __init__(self, cfg=None, **kwargs):
         try:
             super().__init__(cfg)
@@ -320,17 +319,18 @@ class DeleteFile(BaseTool):
             super().__init__()
         self.agent_pool = kwargs.get('agent_pool')
         self.agent_name = kwargs.get('agent_name')
-    
+
     def call(self, params: str, **kwargs) -> str:
         params = self._verify_json_format_args(params)
         path = params['path']
         return self.agent_pool.operation_manager.delete_file(path, self.agent_name)
 
+
 class CopyFile(BaseTool):
-    """Copy a file or directory."""
-    
+    """Copy a file or directory (requires user approval)."""
+
     name = 'copy_file'
-    description = 'Copy a file or directory to a new location in the workspace.'
+    description = 'Copy a file or directory to a new location. Requires user approval.'
     parameters = {
         'type': 'object',
         'properties': {
@@ -345,7 +345,7 @@ class CopyFile(BaseTool):
         },
         'required': ['source', 'destination'],
     }
-    
+
     def __init__(self, cfg=None, **kwargs):
         try:
             super().__init__(cfg)
@@ -353,18 +353,19 @@ class CopyFile(BaseTool):
             super().__init__()
         self.agent_pool = kwargs.get('agent_pool')
         self.agent_name = kwargs.get('agent_name')
-    
+
     def call(self, params: str, **kwargs) -> str:
         params = self._verify_json_format_args(params)
         source = params['source']
         destination = params['destination']
         return self.agent_pool.operation_manager.copy_file(source, destination, self.agent_name)
 
+
 class MoveFile(BaseTool):
-    """Move a file or directory."""
-    
+    """Move a file or directory (requires user approval)."""
+
     name = 'move_file'
-    description = 'Move a file or directory to a new location in the workspace.'
+    description = 'Move a file or directory to a new location. Requires user approval.'
     parameters = {
         'type': 'object',
         'properties': {
@@ -379,7 +380,7 @@ class MoveFile(BaseTool):
         },
         'required': ['source', 'destination'],
     }
-    
+
     def __init__(self, cfg=None, **kwargs):
         try:
             super().__init__(cfg)
@@ -387,7 +388,7 @@ class MoveFile(BaseTool):
             super().__init__()
         self.agent_pool = kwargs.get('agent_pool')
         self.agent_name = kwargs.get('agent_name')
-    
+
     def call(self, params: str, **kwargs) -> str:
         params = self._verify_json_format_args(params)
         source = params['source']
