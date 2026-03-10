@@ -52,6 +52,8 @@ from qwen_agent.tools.custom import (
     CopyFile,
     MoveFile,
     DismissAgent,
+    ListAgents,
+    ShellCmd,
 )
 from qwen_agent.tools.code_interpreter import CodeInterpreter
 from qwen_agent.tools.custom.compression_tools import CompressContext
@@ -81,6 +83,9 @@ class AgentPool:
         
         # Live streaming state for WebUI (updated during sub-agent execution)
         self.sub_agent_state: Dict[str, dict] = {}
+        
+        # List of instance_names currently in an active call (stack for recursion)
+        self.active_stack: List[str] = []
         
         # Explicit stop flag for cancellation
         self.stopped = False
@@ -404,9 +409,10 @@ class OrchestratorAgent(Assistant):
 
     STREAMING_TOOLS = {'call_agent', 'continue_with_agent'}
 
-    def __init__(self, agent_pool: AgentPool, **kwargs):
+    def __init__(self, agent_pool: AgentPool, agent_type: str = 'Orchestrator', **kwargs):
         super().__init__(**kwargs)
         self.agent_pool = agent_pool
+        self.agent_type = agent_type
         self.session_name: str = "MainSession"
         from qwen_agent.utils.tokenization_qwen import count_tokens
         self._count_tokens = count_tokens
@@ -463,15 +469,63 @@ class OrchestratorAgent(Assistant):
             messages=messages, lang=lang, knowledge=knowledge, **kwargs
         )
         
-        # Prepare orchestrator logger
-        logger_inst = self.agent_pool.get_logger(self.session_name, self.name)
+        # Identity formatting: "[Role] [Instance/SessionName]"
+        instance = kwargs.get('agent_instance_name') or self.session_name
+        full_name = self.name
+        if instance:
+            if not full_name.lower().endswith(instance.lower()):
+                full_name = f"{self.agent_type} {instance}"
+        
+        self.name = full_name # Update for UI display
+        
+        # Prepare appropriate logger (Main Session or Sub-Agent Instance)
+        # Using the base agent_type for the class metadata field keeps logs clean.
+        logger_inst = self.agent_pool.get_logger(instance, self.agent_type)
         
         # Log the latest turn
         if messages:
+            # Robust identity insertion into the system prompt regardless of line position
+            m0 = messages[0]
+            m0_role = m0.get('role') if isinstance(m0, dict) else getattr(m0, 'role', '')
+            if m0_role == SYSTEM:
+                m0_content = m0.get('content', '') if isinstance(m0, dict) else getattr(m0, 'content', '')
+                if isinstance(m0_content, str) and instance:
+                    import re
+                    # Look for "You are [Type]." anywhere in the prompt
+                    # This handles both cases: 
+                    # 1. Start of prompt (standard Assistant)
+                    # 2. After [IDENTITY] block (sub-agent instance call)
+                    pattern = rf"(?i)You are {self.agent_type}\."
+                    new_intro = f"You are {self.agent_type} {instance}."
+                    
+                    if re.search(pattern, m0_content):
+                        m0_content = re.sub(pattern, new_intro, m0_content, count=1)
+                    
+                    # Insert Session Metadata section if not already present
+                    if '## Session Metadata' not in m0_content:
+                        meta_lines = [
+                            "## Session Metadata",
+                            f"- Supervisor: User",
+                            f"- Log Path: {logger_inst.log_path}",
+                            "Use your logs to recall details from turns that were compressed.\n"
+                        ]
+                        content_lines = m0_content.split('\n')
+                        insert_pos = 2 if len(content_lines) > 1 and not content_lines[1].startswith("#") else 1
+                        for i, ml in enumerate(meta_lines):
+                            content_lines.insert(insert_pos + i, ml)
+                        m0_content = '\n'.join(content_lines)
+                    
+                    if isinstance(m0, dict):
+                        m0['content'] = m0_content
+                    else:
+                        m0.content = m0_content
+
             # Sync initial state if history is empty
             if not logger_inst.data["history"]:
                 logger_inst.update_history(messages)
-            else:
+            elif not kwargs.get('agent_instance_name'):
+                # Only log the last message for the main orchestrator session.
+                # Sub-agents are already logged by _stream_sub_agent_call to avoid duplicates.
                 logger_inst.log_message(messages[-1])
 
         # --- Custom FnCallAgent-style loop with streaming sub-agent support ---
@@ -643,6 +697,22 @@ class OrchestratorAgent(Assistant):
         instance_name = args.get('instance_name', '')
         agent_class = args.get('agent_class', '')
         
+        # Prevent state corruption when an agent calls ITSELF recursively.
+        # If the instance is already in the stack, cloning its state ensures
+        # that the outer caller's 'conv' doesn't get polluted by inner messages, 
+        # which causes out-of-order UI rendering when 'conv + resp' is joined.
+        if instance_name in self.agent_pool.active_stack:
+            original_instance = instance_name
+            count = self.agent_pool.active_stack.count(instance_name)
+            instance_name = f"{instance_name}_child{count}"
+            
+            # Clone base conversation and append the current turn's context
+            base_conv = self.agent_pool.get_conversation(original_instance)
+            clone_conv = copy.deepcopy(base_conv)
+            if current_response:
+                clone_conv.extend(copy.deepcopy(current_response))
+            self.agent_pool.instance_conversations[instance_name] = clone_conv
+
         # 1. Resolve agent class and instance
         if not agent_class:
             agent_class = self.agent_pool.instance_classes.get(instance_name)
@@ -665,26 +735,59 @@ class OrchestratorAgent(Assistant):
         # Prepare sub-agent logger
         logger_inst = self.agent_pool.get_logger(instance_name, agent_class)
 
+        # Build the final system message FIRST (before conversation init)
+        # so there's only ever ONE system prompt in the conversation and logs.
+        base_sys = getattr(agent, 'base_system_message', agent.system_message)
+        lines = base_sys.strip().split('\n')
+        
+        if lines:
+            # 1. Update the first line: "You are [Role]." -> "You are [Role] [Instance]."
+            if lines[0].startswith("You are") and f" {instance_name}" not in lines[0]:
+                lines[0] = lines[0].replace(".", f" {instance_name}.", 1)
+            
+            # 2. Insert session metadata after the tagline (usually line 2)
+            metadata_block = [
+                "## Session Metadata",
+                f"- Supervisor: {self.name} ({self.__class__.__name__})",
+                f"- Log Path: {logger_inst.log_path}",
+                "Use your logs to recall details from turns that were compressed.\n"
+            ]
+            
+            # Insert after the tagline if line 2 exists and isn't a header, otherwise after line 1
+            insert_pos = 2 if len(lines) > 1 and not lines[1].startswith("#") else 1
+            for i, metadata_line in enumerate(metadata_block):
+                lines.insert(insert_pos + i, metadata_line)
+                
+        final_sys_content = "\n".join(lines)
+        agent.system_message = final_sys_content
+
         if tool_name == 'call_agent':
             # Persistent sessions: if instance exists, we just append to it.
             if instance_name not in self.agent_pool.instance_conversations:
-                # New instance: start with the agent's base system message (from soul.md)
+                # New instance: use the FINAL system message (with metadata already integrated)
                 self.agent_pool.instance_conversations[instance_name] = [
-                    Message(role=SYSTEM, content=agent.system_message)
+                    Message(role=SYSTEM, content=final_sys_content)
                 ]
                 # Record the initial state in the log
                 logger_inst.update_history(self.agent_pool.instance_conversations[instance_name])
-            elif not logger_inst.data["history"]:
-                # If we have context in pool but log is empty (e.g. fresh session), sync it
-                logger_inst.update_history(self.agent_pool.instance_conversations[instance_name])
+            else:
+                # Existing instance: update the system message in-place with latest metadata
+                conv_existing = self.agent_pool.instance_conversations[instance_name]
+                if conv_existing and conv_existing[0].get(ROLE) == SYSTEM:
+                    conv_existing[0].content = final_sys_content
+                if not logger_inst.data["history"]:
+                    logger_inst.update_history(conv_existing)
             
         task = args.get('task', '')
         context = args.get('context', '')
-        msg_text = (
-            f'Context: {context}\n\nTask: {task}\n\nPlease help with this task.'
-            if context
-            else task
-        )
+        
+        caller_prefix = f"This is a message from {self.name}."
+        if context:
+            context = f"{caller_prefix}\n{context}"
+        else:
+            context = caller_prefix
+
+        msg_text = f'Context: {context}\n\nTask: {task}\n\nPlease help with this task.'
         if not msg_text.strip():
             msg_text = "Please proceed with your task."
 
@@ -725,24 +828,6 @@ class OrchestratorAgent(Assistant):
                             added_to_sub.add(item_value)
 
         # streaming status is updated during the run
-        
-        # Prepare sub-agent system message with identity and memory info
-        metadata_prompt = f"""
-[IDENTITY]
-You are a specialized agent instance.
-- Instance Name: {instance_name}
-- Agent Class: {agent_class}
-- Supervisor: {self.session_name} ({self.name})
-
-[MEMORY & LOGS]
-Your entire session is being recorded for long-term memory.
-- Log Path: {logger_inst.log_path}
-If you need to recall details from this or previous sessions that were compressed, you can check your logs.
-"""
-        # Ensure metadata is in sub-agent's prompt (Assistant agents typically have a system message)
-        orig_sys = getattr(agent, 'system_message', "")
-        if metadata_prompt not in orig_sys:
-            agent.system_message = metadata_prompt + "\n" + orig_sys
 
         conv = self.agent_pool.get_conversation(instance_name)
         user_msg = {ROLE: USER, CONTENT: sub_agent_msg_content}
@@ -750,6 +835,9 @@ If you need to recall details from this or previous sessions that were compresse
         
         # Record user message in persistent log
         logger_inst.log_message(user_msg)
+        
+        # Track this call in the active stack for UI context switching
+        self.agent_pool.active_stack.append(instance_name)
 
         # Initialize streaming state for the WebUI
         state = {
@@ -817,8 +905,15 @@ If you need to recall details from this or previous sessions that were compresse
             logger.error(f"Error in sub-agent {instance_name}: {str(e)}", exc_info=True)
             return f"Error executing sub-agent {instance_name}: {str(e)}"
         finally:
+            # Clean up state
             state['active'] = False
             self.agent_pool.sub_agent_state[instance_name] = state
+            
+            # Remove from active stack (pop the most recent occurrence)
+            for i in range(len(self.agent_pool.active_stack) - 1, -1, -1):
+                if self.agent_pool.active_stack[i] == instance_name:
+                    self.agent_pool.active_stack.pop(i)
+                    break
 
 
 # ─── Agent loading ─────────────────────────────────────────────────────────────
@@ -839,10 +934,14 @@ def load_orchestrator_agent(agent_pool: AgentPool, llm_cfg: dict) -> Assistant:
         system_prompt = _default_orchestrator_prompt(agent_pool)
 
     # Create OrchestratorAgent directly
+    # Identity formatting (Orchestrator SessionName) is handled in _run
+    raw_name = config.get('name', 'Orchestrator')
+    
     agent = OrchestratorAgent(
         agent_pool=agent_pool,
         llm=llm_cfg,
-        name=config.get('name', 'Orchestrator'),
+        name=raw_name,
+        agent_type="Orchestrator",
         description=config.get('tagline', 'Supervisor agent that coordinates sub-agents'),
         system_message=system_prompt,
         function_list=[],
@@ -854,6 +953,7 @@ def load_orchestrator_agent(agent_pool: AgentPool, llm_cfg: dict) -> Assistant:
     # ── Register sub-agent tools (intercepted in _run, not _call_tool) ──
     agent.function_map['call_agent'] = _SubAgentFunctionProxy(CALL_AGENT_SCHEMA)
     agent.function_map['dismiss_agent'] = DismissAgent(agent_pool=agent_pool)
+    agent.function_map['list_agents'] = ListAgents(agent_pool=agent_pool)
 
     # ── File tools (reads are free, writes block for user approval) ──
     read_tool = ReadFile()
@@ -901,6 +1001,12 @@ def load_orchestrator_agent(agent_pool: AgentPool, llm_cfg: dict) -> Assistant:
     compress_tool.agent_pool = agent_pool
     compress_tool.agent_name = 'orchestrator'
     agent.function_map['compress_context'] = compress_tool
+
+    # ── Shell Execution ──
+    shell_tool = ShellCmd()
+    shell_tool.agent_pool = agent_pool
+    shell_tool.agent_name = 'orchestrator'
+    agent.function_map['shell_cmd'] = shell_tool
 
     return agent
 
@@ -1022,12 +1128,14 @@ def load_sub_agent_with_tools(agent_pool: AgentPool, agent_name: str, llm_cfg: d
         llm_cfg, 
         str(soul_path), 
         agent_class=OrchestratorAgent, 
-        agent_pool=agent_pool
+        agent_pool=agent_pool,
+        role_name=agent_name # e.g. 'writer', 'researcher'
     )
     
     # Add recursive sub-agent tools (intercepted in _run)
     agent.function_map['call_agent'] = _SubAgentFunctionProxy(CALL_AGENT_SCHEMA)
     agent.function_map['dismiss_agent'] = DismissAgent(agent_pool=agent_pool)
+    agent.function_map['list_agents'] = ListAgents(agent_pool=agent_pool)
     
     # Add file tools to the agent (instantiate directly, then set attrs)
     read_tool = ReadFile()
@@ -1045,8 +1153,12 @@ def load_sub_agent_with_tools(agent_pool: AgentPool, agent_name: str, llm_cfg: d
     
     # Add Python Sandbox tool (Code Interpreter)
     # The Code Interpreter operates inside a Docker sandbox and mounts the workspace
-    code_tool = CodeInterpreter(cfg={'work_dir': str(agent_pool.operation_manager.base_dir)})
-    agent.function_map['code_interpreter'] = code_tool
+    try:
+        code_tool = CodeInterpreter(cfg={'work_dir': str(agent_pool.operation_manager.base_dir)})
+        agent.function_map['code_interpreter'] = code_tool
+    except Exception as e:
+        logger.warning(f"Failed to load CodeInterpreter for agent {agent_name}: {e}")
+        print(f"[WARNING] 🐳 CodeInterpreter disabled for '{agent_name}': {e}")
     
     edit_tool = EditFile()
     edit_tool.agent_pool = agent_pool
@@ -1080,6 +1192,11 @@ def load_sub_agent_with_tools(agent_pool: AgentPool, agent_name: str, llm_cfg: d
     compress_tool.agent_pool = agent_pool
     compress_tool.agent_name = agent_name
     agent.function_map['compress_context'] = compress_tool
+    
+    shell_tool = ShellCmd()
+    shell_tool.agent_pool = agent_pool
+    shell_tool.agent_name = agent_name
+    agent.function_map['shell_cmd'] = shell_tool
     
     # Inform the agent about the user-approval workflow
     agent.system_message += """

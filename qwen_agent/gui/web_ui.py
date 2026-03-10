@@ -55,6 +55,8 @@ class WebUI:
             self.agent_hub = None
 
         user_name = chatbot_config.get('user.name', 'user')
+        self._last_active_sa = None
+
         self.user_config = {
             'name': user_name,
             'avatar': chatbot_config.get(
@@ -201,7 +203,7 @@ class WebUI:
                             agent_selector = gr.Dropdown(
                                 [(agent.name, i) for i, agent in enumerate(self.agent_list)],
                                 label='Agents',
-                                info='选择一个Agent',
+                                info='Agent',
                                 value=0,
                                 interactive=True,
                             )
@@ -220,7 +222,7 @@ class WebUI:
 
                         if self.prompt_suggestions:
                             gr.Examples(
-                                label='推荐对话',
+                                label='Suggestions',
                                 examples=self.prompt_suggestions,
                                 inputs=[input],
                             )
@@ -242,6 +244,9 @@ class WebUI:
                                 visible=False,
                                 lines=2,
                             )
+                            # Control settings for approvals
+                            timeout_toggle = gr.Checkbox(label="Enable 5-minute AFK auto-reject timeout (if unchecked, it will wait forever)", value=True)
+                            
                             # Timer to poll for pending approvals every 1 second
                             approval_timer = gr.Timer(value=1, active=True)
                         
@@ -276,7 +281,7 @@ class WebUI:
                         fn=self.add_text,
                         inputs=[input, audio_input, chatbot, history],
                         outputs=[input, audio_input, chatbot, history],
-                        queue=False,
+                        queue=True,
                     )
 
                     if len(self.agent_list) > 1 and enable_mention:
@@ -284,10 +289,12 @@ class WebUI:
                             self.add_mention,
                             [chatbot, agent_selector],
                             [chatbot, agent_selector],
+                            queue=True,
                         ).then(
                             self.agent_run,
                             [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
                             [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
+                            queue=True,
                         )
                     elif len(self.agent_list) > 1:
                         # Multiple agents but mention disabled - still pass agent_selector
@@ -295,12 +302,14 @@ class WebUI:
                             self.agent_run,
                             [chatbot, history, agent_selector, sub_chatbot, sub_agent_status, session_name],
                             [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
+                            queue=True,
                         )
                     else:
                         input_promise = input_promise.then(
                             self.agent_run,
                             [chatbot, history, session_name],
                             [chatbot, history],
+                            queue=True,
                         )
 
                     input_promise.then(self.flushed, None, [input])
@@ -328,6 +337,12 @@ class WebUI:
                         fn=self._handle_reject,
                         inputs=[approval_id_list, reject_reason_input],
                         outputs=[approval_id_list, approval_details, approval_accordion, reject_reason_input]
+                    )
+                    
+                    timeout_toggle.change(
+                        fn=self._handle_timeout_toggle,
+                        inputs=[timeout_toggle],
+                        outputs=None
                     )
 
                     # --- Event Handlers for Stop/Retry/Reset ---
@@ -363,13 +378,7 @@ class WebUI:
         if not text or not isinstance(text, str):
             return text
             
-        # Regex for markdown links: [label](path)
-        # We look for local paths that look like directories
-        def replace_dir_link(match):
-            label = match.group(1)
-            path = match.group(2)
-            
-            # Check if it's a local path and a directory
+        def is_dir(path):
             try:
                 # Remove common local prefixes
                 clean_path = path
@@ -380,21 +389,45 @@ class WebUI:
                 if os.name == 'nt' and clean_path.startswith('/') and len(clean_path) > 2 and clean_path[2] == ':':
                     clean_path = clean_path[1:]
 
-                if os.path.isdir(clean_path):
-                    return f"📂 **{label}** (Directory: `{path}`)"
+                return os.path.isdir(clean_path)
             except:
-                pass
+                return False
+
+        # 1. Handle explicit markdown links [label](path)
+        def replace_dir_link(match):
+            label = match.group(1)
+            path = match.group(2)
+            if is_dir(path):
+                return f"📂 **{label}** (Directory: `{path}`)"
             return match.group(0)
 
-        # Pattern: [anything except ]](anything except ))
-        sanitized = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_dir_link, text)
+        # Regex for markdown links: [label](path)
+        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_dir_link, text)
+        
+        # 2. Handle raw absolute paths that might be auto-linkified by ModelScope
+        def replace_raw_dir(match):
+            path = match.group(0)
+            # Basic punctuation cleanup (don't include trailing dots/commas in the path check)
+            punct = ""
+            while path and path[-1] in '.,;:!?)]':
+                punct = path[-1] + punct
+                path = path[:-1]
+                
+            if is_dir(path):
+                return f"`{path}`{punct}"
+            return match.group(0)
+
+        # Regex for Windows paths (C:\...) or Unix-style absolute paths ( /... )
+        raw_path_pattern = r'(?:[a-zA-Z]:\\[^\s"\'<>|]+|/(?:[^/\s"\'<>|]+/)+[^\s"\'<>|]*)'
+        sanitized = re.sub(raw_path_pattern, replace_raw_dir, text)
+        
         return sanitized
 
     def change_agent(self, agent_selector):
         # Restore original function map when switching agents
         if agent_selector in self.original_function_maps:
             self.agent_list[agent_selector].function_map = self.original_function_maps[agent_selector]
-        yield agent_selector, self._create_agent_info_block(agent_selector), self._create_agent_plugins_block(
+        yield agent_selector, self._create_agent_info_block(agent_selector), self._get_agent_tools_update(
             agent_selector)
 
     def toggle_tools(self, selected_tools, agent_selector=None):
@@ -444,7 +477,7 @@ class WebUI:
             # But if I check one, it should have ONLY that one.
             agent.function_map = new_map
             
-        yield self._create_agent_plugins_block(agent_selector)
+        yield self._get_agent_tools_update(agent_selector)
 
     def add_text(self, _input, _audio_input, _chatbot, _history):
         _history.append({
@@ -549,8 +582,8 @@ class WebUI:
             logger.info('agent_run input:\n' + pprint.pformat(_history, indent=2))
 
         # Capture expected structure at the start to ensure stable yield lengths
-        has_sub = (_sub_chatbot is not None)
-        has_selector = (_agent_selector is not None)
+        has_sub = len(self.agent_list) > 1 or self.agent_hub is not None
+        has_selector = len(self.agent_list) > 1
         
         num_input_bubbles = len(_chatbot) - 1
         num_output_bubbles = 1
@@ -568,10 +601,12 @@ class WebUI:
         _agent_pool = getattr(agent_runner, 'agent_pool', None)
         if _agent_pool:
             _agent_pool.stopped = False
+            if hasattr(_agent_pool, 'sub_agent_state'):
+                _agent_pool.sub_agent_state.clear()
         
-        # Initialize sub-agent chat if we have a sub-chatbot
+        # Initialize sub-agent chat for new turn
         if has_sub:
-            _sub_chatbot = _sub_chatbot or []
+            _sub_chatbot = []
             _sub_chatbot.append([None, f"🚀 {agent_runner.name} is working..."])
             if _sub_status:
                 _sub_status = "Agent thinking..."
@@ -592,114 +627,160 @@ class WebUI:
         sub_label_base = "🔄 Sub-Agent Activity"
         sub_label = sub_label_base
 
-        for responses in agent_runner.run(_history, **self.run_kwargs):
-            if not responses:
-                continue
-            if responses[-1][CONTENT] == PENDING_USER_INPUT:
-                logger.info('Interrupted. Waiting for user input!')
+        import time
+        last_yield_time = 0
+        yield_interval = 0.1  # 10Hz throttle
+
+        try:
+            for responses in (agent_runner.run(_history, **self.run_kwargs) if hasattr(agent_runner, "run") else []):
+                if not responses:
+                    continue
+                if responses[-1][CONTENT] == PENDING_USER_INPUT:
+                    logger.info('Interrupted. Waiting for user input!')
+                    if has_sub:
+                        _sub_chatbot.append([None, "⏳ Waiting for your input..."])
+                    break
+
+                display_responses = convert_fncall_to_text(responses)
+                if not display_responses:
+                    continue
+                if display_responses[-1][CONTENT] is None:
+                    continue
+
+                # Update sub-agent panel from agent_pool streaming state
                 if has_sub:
-                    _sub_chatbot.append([None, "⏳ Waiting for your input..."])
-                break
+                    # Try to read live streaming state from OrchestratorAgent's agent_pool
+                    _agent_pool = getattr(agent_runner, 'agent_pool', None)
+                    if _agent_pool and hasattr(_agent_pool, 'sub_agent_state'):
+                        # Identify the sub-agent to display using the active_stack (recursive safe)
+                        display_name = None
+                        active_stack = getattr(_agent_pool, 'active_stack', [])
+                        
+                        if active_stack:
+                            # Use the top of the stack (deepest active agent)
+                            display_name = active_stack[-1]
+                            self._last_active_sa = display_name
+                        else:
+                            # If no one is active according to stack, check if anyone is still marked active in state
+                            # (Safety fallback)
+                            for sa_name, sa_state in _agent_pool.sub_agent_state.items():
+                                if sa_state.get('active'):
+                                    display_name = sa_name
+                                    self._last_active_sa = sa_name
+                                    break
+                        
+                        # Fallback to last active if none are currently running
+                        if not display_name:
+                            display_name = self._last_active_sa
 
-            display_responses = convert_fncall_to_text(responses)
-            if not display_responses:
-                continue
-            if display_responses[-1][CONTENT] is None:
-                continue
-
-            # Update sub-agent panel from agent_pool streaming state
-            if has_sub:
-                # Try to read live streaming state from OrchestratorAgent's agent_pool
-                _agent_pool = getattr(agent_runner, 'agent_pool', None)
-                if _agent_pool and hasattr(_agent_pool, 'sub_agent_state'):
-                    new_sub_chatbot = []
-                    
-                    # Find the deeply active sub-agent
-                    active_sa_name = None
-                    active_sa_state = None
-                    for sa_name, sa_state in _agent_pool.sub_agent_state.items():
-                        if sa_state.get('active'):
-                            active_sa_name = sa_name
-                            active_sa_state = sa_state
-                    
-                    if active_sa_name and active_sa_state:
-                        # Display sub-agent identity in label
-                        sub_label = f"Sub-Agent: {active_sa_state.get('agent_name', active_sa_name)}"
-                        messages = active_sa_state.get('messages', [])
-                        if messages:
-                            formatted_msgs = convert_fncall_to_text(messages)
-                            new_sub_chatbot.append([f"🤝 Conversation with **{active_sa_name}**", None])
+                        if display_name and display_name in _agent_pool.sub_agent_state:
+                            sa_state = _agent_pool.sub_agent_state[display_name]
+                            sub_label = f"Sub-Agent: {sa_state.get('agent_name', display_name)}"
+                            messages = sa_state.get('messages', [])
                             
-                            current_pair = [None, None]
-                            for msg in formatted_msgs:
-                                role = msg.get('role')
-                                content = msg.get('content')
-                                if role == USER:
-                                    if current_pair[0] is not None:
+                            new_sub_chatbot = []
+                            if messages:
+                                formatted_msgs = convert_fncall_to_text(messages)
+                                new_sub_chatbot.append([f"🤝 Full context for **{display_name}**", None])
+                                
+                                current_pair = [None, None]
+                                for msg in formatted_msgs:
+                                    role = msg.get('role')
+                                    content = msg.get('content')
+                                    if role == USER:
+                                        if current_pair[0] is not None:
+                                            new_sub_chatbot.append(current_pair)
+                                            current_pair = [None, None]
+                                        current_pair[0] = content
+                                    elif role == ASSISTANT:
+                                        current_pair[1] = content
                                         new_sub_chatbot.append(current_pair)
                                         current_pair = [None, None]
-                                    current_pair[0] = content
-                                elif role == ASSISTANT:
-                                    current_pair[1] = content
+                                
+                                if current_pair[0] is not None or current_pair[1] is not None:
                                     new_sub_chatbot.append(current_pair)
-                                    current_pair = [None, None]
                             
-                            if current_pair[0] is not None or current_pair[1] is not None:
-                                new_sub_chatbot.append(current_pair)
+                            if sa_state.get('active') and _sub_status:
+                                _sub_status = f"{display_name} is responding..."
                             
-                            if _sub_status and active_sa_state.get('active'):
-                                _sub_status = f"{active_sa_name} is responding..."
+                            _sub_chatbot = new_sub_chatbot
+                        else:
+                            sub_label = sub_label_base
+                    else:
+                        # Fallback for non-OrchestratorAgent
+                        new_responses = responses[_prev_rsp_count:]
+                        for rsp in new_responses:
+                            role = rsp.get('role', '')
+                            fn_call = rsp.get('function_call')
+                            if role == 'assistant' and fn_call:
+                                tool_name = fn_call.get('name', 'tool') if isinstance(fn_call, dict) else getattr(fn_call, 'name', 'tool')
+                                _sub_chatbot.append([f"🔧 {tool_name}", "Calling..."])
+                            elif role == 'function':
+                                tool_name = rsp.get('name', 'tool')
+                                result_preview = str(rsp.get('content', ''))[:200]
+                                for i in range(len(_sub_chatbot) - 1, -1, -1):
+                                    if _sub_chatbot[i][0] and f"🔧 {tool_name}" in _sub_chatbot[i][0]:
+                                        _sub_chatbot[i] = [f"✅ {tool_name}", result_preview or "Done"]
+                                        break
 
-                    _sub_chatbot = new_sub_chatbot
+                    _prev_rsp_count = len(responses)
+
+                while len(display_responses) > num_output_bubbles:
+                    _chatbot.append([None, None])
+                    _chatbot[-1][1] = [None for _ in range(len(self.agent_list))]
+                    num_output_bubbles += 1
+
+                assert num_output_bubbles == len(display_responses)
+                assert num_input_bubbles + num_output_bubbles == len(_chatbot)
+
+                for i, rsp in enumerate(display_responses):
+                    agent_index = self._get_agent_index_by_name(rsp[NAME])
+                    sanitized_content = self._sanitize_content(rsp[CONTENT])
+                    _chatbot[num_input_bubbles + i][1][agent_index] = sanitized_content
+
+                if has_selector:
+                    _agent_selector = agent_index
+
+                # Sanitize sub-chatbot content
+                if has_sub:
+                    for bubble in _sub_chatbot:
+                        if bubble[0]:
+                            bubble[0] = self._sanitize_content(bubble[0])
+                        if bubble[1]:
+                            bubble[1] = self._sanitize_content(bubble[1])
+
+                # Throttled Yield based on initial parameters
+                current_time = time.time()
+                if current_time - last_yield_time > yield_interval:
+                    last_yield_time = current_time
+                    if has_sub:
+                        if has_selector:
+                            yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, _agent_selector, gr.update(value=copy.deepcopy(_sub_chatbot), label=sub_label), _sub_status
+                        else:
+                            yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, gr.update(value=copy.deepcopy(_sub_chatbot), label=sub_label), _sub_status
+                    else:
+                        if has_selector:
+                            yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, _agent_selector
+                        else:
+                            yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            error_msg = f"⚠️ **Model or Service Error:**\n```\n{str(e)}\n```\n\n*Please check your LLM configuration or ensure the model is loaded.*"
+            if _chatbot and not getattr(_chatbot[-1][1][-1] if isinstance(_chatbot[-1][1], list) else (_chatbot[-1][1] or ''), 'strip', lambda: '')():
+                # Replace empty bubble
+                if isinstance(_chatbot[-1][1], list):
+                    _chatbot[-1][1][-1] = error_msg
                 else:
-                    # Fallback for non-OrchestratorAgent
-                    new_responses = responses[_prev_rsp_count:]
-                    for rsp in new_responses:
-                        role = rsp.get('role', '')
-                        fn_call = rsp.get('function_call')
-                        if role == 'assistant' and fn_call:
-                            tool_name = fn_call.get('name', 'tool') if isinstance(fn_call, dict) else getattr(fn_call, 'name', 'tool')
-                            _sub_chatbot.append([f"🔧 {tool_name}", "Calling..."])
-                        elif role == 'function':
-                            tool_name = rsp.get('name', 'tool')
-                            result_preview = str(rsp.get('content', ''))[:200]
-                            for i in range(len(_sub_chatbot) - 1, -1, -1):
-                                if _sub_chatbot[i][0] and f"🔧 {tool_name}" in _sub_chatbot[i][0]:
-                                    _sub_chatbot[i] = [f"✅ {tool_name}", result_preview or "Done"]
-                                    break
-
-                _prev_rsp_count = len(responses)
-
-            while len(display_responses) > num_output_bubbles:
-                _chatbot.append([None, None])
-                _chatbot[-1][1] = [None for _ in range(len(self.agent_list))]
-                num_output_bubbles += 1
-
-            assert num_output_bubbles == len(display_responses)
-            assert num_input_bubbles + num_output_bubbles == len(_chatbot)
-
-            for i, rsp in enumerate(display_responses):
-                agent_index = self._get_agent_index_by_name(rsp[NAME])
-                sanitized_content = self._sanitize_content(rsp[CONTENT])
-                _chatbot[num_input_bubbles + i][1][agent_index] = sanitized_content
-
-            if has_selector:
-                _agent_selector = agent_index
-
-            # Sanitize sub-chatbot content
-            if has_sub:
-                for bubble in _sub_chatbot:
-                    if bubble[0]:
-                        bubble[0] = self._sanitize_content(bubble[0])
-                    if bubble[1]:
-                        bubble[1] = self._sanitize_content(bubble[1])
-
-            # Stable Yield based on initial parameters
+                    _chatbot[-1][1] = error_msg
+            else:
+                _chatbot.append((None, error_msg))
+            
             if has_sub:
                 if has_selector:
-                    yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector, gr.update(value=_sub_chatbot, label=sub_label), _sub_status
+                    yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector, gr.update(value=_sub_chatbot, label="⚠️ Error"), "Failed"
                 else:
-                    yield gr.update(value=_chatbot, label=main_label), _history, gr.update(value=_sub_chatbot, label=sub_label), _sub_status
+                    yield gr.update(value=_chatbot, label=main_label), _history, gr.update(value=_sub_chatbot, label="⚠️ Error"), "Failed"
             else:
                 if has_selector:
                     yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector
@@ -733,14 +814,14 @@ class WebUI:
         # Stable Final Yield
         if has_sub:
             if has_selector:
-                yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector, gr.update(value=_sub_chatbot, label=sub_label_base), _sub_status
+                yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, _agent_selector, gr.update(value=copy.deepcopy(_sub_chatbot), label=sub_label_base), _sub_status
             else:
-                yield gr.update(value=_chatbot, label=main_label), _history, gr.update(value=_sub_chatbot, label=sub_label_base), _sub_status
+                yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, gr.update(value=copy.deepcopy(_sub_chatbot), label=sub_label_base), _sub_status
         else:
             if has_selector:
-                yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector
+                yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, _agent_selector
             else:
-                yield gr.update(value=_chatbot, label=main_label), _history
+                yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history
 
         if self.verbose:
             logger.info('agent_run response:\n' + pprint.pformat(responses, indent=2))
@@ -797,6 +878,16 @@ class WebUI:
             choices=all_tools,  # Show all tools from all agents
             interactive=True,
         )
+
+    def _get_agent_tools_update(self, agent_index=0):
+        from qwen_agent.gui.gradio_dep import gr
+        agent_interactive = self.agent_list[agent_index]
+        all_tools = self.all_available_tools
+        if hasattr(agent_interactive, 'function_map'):
+            enabled_tools = list(agent_interactive.function_map.keys())
+        else:
+            enabled_tools = []
+        return gr.update(value=enabled_tools, choices=all_tools)
 
     # --- User Approval Helper Methods ---
 
@@ -890,3 +981,9 @@ class WebUI:
         # Refresh the list and clear the reason input
         choices_update, details_update, accordion_update = self._update_approval_list()
         return choices_update, details_update, accordion_update, gr.update(value="", visible=False)
+
+    def _handle_timeout_toggle(self, enabled):
+        """Update the AFK timeout setting in OperationManager."""
+        manager = self._get_operation_manager()
+        if manager:
+            manager.enable_timeout = enabled

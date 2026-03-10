@@ -125,10 +125,12 @@ class ViewImage(BaseTool):
 
 
 class WriteFile(BaseTool):
-    """Create a new file in the workspace (requires user approval)."""
+    """Create a new file in the workspace."""
 
     name = 'write_file'
-    description = 'Create a NEW file in the workspace. Requires user approval. To edit existing files, use edit_file instead.'
+    description = ('Create a NEW file in the workspace. This is auto-approved. '
+                   'To edit existing files, use edit_file instead. Overwriting an '
+                   'existing file not owned by you requires user approval.')
     parameters = {
         'type': 'object',
         'properties': {
@@ -172,7 +174,8 @@ class EditFile(BaseTool):
     """Edit an existing file (requires user approval)."""
 
     name = 'edit_file'
-    description = 'Edit an EXISTING file. Requires user approval before changes are applied.'
+    description = ('Edit an EXISTING file. Requires user approval before changes are applied '
+                   'for any files not owned by the current agent. Editing files you created in this session is auto-approved.')
     parameters = {
         'type': 'object',
         'properties': {
@@ -300,7 +303,8 @@ class DeleteFile(BaseTool):
     """Delete a file (requires user approval)."""
 
     name = 'delete_file'
-    description = 'Delete a file. Requires user approval before deletion.'
+    description = ('Delete a file. Requires user approval before deletion for any files not '
+                   'owned by the current agent. Deleting files you created in this session is auto-approved.')
     parameters = {
         'type': 'object',
         'properties': {
@@ -327,10 +331,11 @@ class DeleteFile(BaseTool):
 
 
 class CopyFile(BaseTool):
-    """Copy a file or directory (requires user approval)."""
+    """Copy a file or directory."""
 
     name = 'copy_file'
-    description = 'Copy a file or directory to a new location. Requires user approval.'
+    description = ('Copy a file or directory to a new location. This is auto-approved if the destination is new. '
+                   'You become the owner of the copied file, allowing you to edit it freely without user approval.')
     parameters = {
         'type': 'object',
         'properties': {
@@ -365,7 +370,8 @@ class MoveFile(BaseTool):
     """Move a file or directory (requires user approval)."""
 
     name = 'move_file'
-    description = 'Move a file or directory to a new location. Requires user approval.'
+    description = ('Move a file or directory to a new location. Requires user approval for any files not owned '
+                   'by the current agent. Moving files you created in this session is auto-approved.')
     parameters = {
         'type': 'object',
         'properties': {

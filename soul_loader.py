@@ -107,7 +107,7 @@ def get_tool_description(tool_name: str) -> str:
     return descriptions.get(tool_name, 'access external information')
 
 
-def create_agent_from_soul(llm_cfg: dict, soul_path: str = 'soul.md', agent_class=None, **agent_kwargs):
+def create_agent_from_soul(llm_cfg: dict, soul_path: str = 'soul.md', agent_class=None, role_name: str = None, **agent_kwargs):
     """
     Create an Agent from a soul.md file.
     
@@ -134,18 +134,28 @@ def create_agent_from_soul(llm_cfg: dict, soul_path: str = 'soul.md', agent_clas
     # Note: Tools are added separately by the framework
     # Don't use function_list here as tools are added manually later
     
+    # Build formatted name: "Role Name" (e.g., "Writer Bob")
+    # Avoid duplication if the role name is already part of the name (e.g. "Writer Writer")
+    raw_name = config.get('name', 'Assistant')
+    if role_name and not raw_name.lower().startswith(role_name.lower()):
+        formatted_name = f"{role_name.capitalize()} {raw_name}"
+    else:
+        formatted_name = raw_name
+
     # Create agent
     agent = agent_class(
         llm=llm_cfg,
-        name=config.get('name', 'Assistant'),
+        name=formatted_name,
         description=config.get('tagline', 'A helpful AI assistant'),
         system_message=system_prompt,
         function_list=[],  # Empty - tools added manually by agent_orchestrator
+        agent_type=role_name.capitalize() if role_name else raw_name,
         **agent_kwargs
     )
     
-    # Store config for later access
+    # Store config and base system message for later dynamic updates
     agent.agent_configs = {config.get('name', 'assistant'): config}
+    agent.base_system_message = system_prompt
 
     return agent, config
 

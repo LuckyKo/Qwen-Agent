@@ -2,7 +2,9 @@ from .file_ops import ReadFile, ViewImage, WriteFile, EditFile, ListDir, Grep, D
 from .manager_ops import (
     CallAgent,
     DismissAgent,
+    ListAgents,
 )
+from .shell_cmd import ShellCmd
 
 __all__ = [
     'ReadFile',
@@ -16,4 +18,6 @@ __all__ = [
     'MoveFile',
     'CallAgent',
     'DismissAgent',
+    'ListAgents',
+    'ShellCmd',
 ]

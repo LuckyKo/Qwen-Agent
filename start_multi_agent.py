@@ -29,7 +29,6 @@ from qwen_agent.tools import (
     simple_doc_parser,
     doc_parser,
     extract_doc_vocabulary,
-    amap_weather,
     code_interpreter,
 )
 
@@ -86,33 +85,37 @@ llm_cfg = {
 # All tools will be available in UI, but only these will be enabled by default
 DEFAULT_TOOLS = {
     'orchestrator': [
-        'call_agent', 'dismiss_agent',
+        'call_agent', 'dismiss_agent', 'list_agents',
         'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'read_file', 'view_image', 'list_dir', 'grep',
         'ddg_search', 'web_extractor'
     ],
     'coder': [
-        'call_agent', 'dismiss_agent',
-        'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'list_dir', 'grep', 'code_interpreter',
+        'call_agent', 'list_agents',
+        'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'list_dir', 'grep', 'code_interpreter', 'shell_cmd',
         'ddg_search', 'web_extractor'
     ],
     'researcher': [
-        'call_agent', 'dismiss_agent',
+        'call_agent', 'list_agents',
         'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'list_dir', 'grep', 'code_interpreter',
         'ddg_search', 'web_extractor',
         'doc_parser', 'simple_doc_parser', 'extract_doc_vocabulary'
     ],
     'writer': [
-        'call_agent', 'dismiss_agent',
+        'call_agent', 'list_agents',
         'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'list_dir',
         'ddg_search', 'web_extractor',
         'doc_parser', 'simple_doc_parser'
+    ],
+    'reviewer': [
+        'call_agent', 'list_agents',
+        'read_file', 'view_image', 'compress_context', 'list_dir', 'grep', 'code_interpreter',
     ],
 }
 
 # Tools available to ALL agents (shown in UI but disabled by default)
 ALL_BUILTIN_TOOLS = [
-    'image_gen', 'storage', 'amap_weather', 'code_interpreter', 'python_executor',
-    'delete_file',  # These are powerful - enable manually
+    'image_gen', 'storage', 'code_interpreter', 'python_executor',
+    'delete_file', 'shell_cmd', # These are powerful - enable manually
 ]
 
 
@@ -155,12 +158,6 @@ if __name__ == '__main__':
             
             if 'extract_doc_vocabulary' in default_tools:
                 agent.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary()
-            
-            if 'amap_weather' in default_tools:
-                try:
-                    agent.function_map['amap_weather'] = amap_weather.AmapWeather()
-                except Exception:
-                    pass
             
             if 'code_interpreter' in default_tools:
                 try:

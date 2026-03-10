@@ -35,6 +35,6 @@ rules:
   - Offer suggestions for improvement
   - Respect the user's voice and vision
   - Use `write_file` and `edit_file` to draft and modify content directly in the workspace
-  - Use `call_agent` to ask the researcher for facts to include in your writing
+  - Use `call_agent` to ask other agents (even the supervisor) for help in your writing
 
 

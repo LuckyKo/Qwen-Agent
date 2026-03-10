@@ -195,7 +195,9 @@ class Agent(ABC):
                 kwargs['agent_obj'] = self
             tool_result = tool.call(tool_args, **kwargs)
         except (ToolServiceError, DocParserError) as ex:
-            raise ex
+            error_message = str(ex)
+            logger.warning(f'Tool `{tool_name}` reported a service error:\n{error_message}')
+            return error_message
         except Exception as ex:
             exception_type = type(ex).__name__
             exception_message = str(ex)

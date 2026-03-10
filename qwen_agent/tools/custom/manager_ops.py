@@ -60,18 +60,18 @@ class CallAgent(BaseTool):
         # Prepare sub-agent logger
         logger_inst = self.agent_pool.get_logger(instance_name, agent_class)
         
+        # Identify the caller (supervisor)
+        caller = kwargs.get('agent_obj')
+        caller_name = getattr(caller, 'name', 'Unknown')
+        caller_class = caller.__class__.__name__ if caller else 'Tool'
+
         # Prepare sub-agent system message with identity and memory info
         metadata_prompt = f"""
 [IDENTITY]
 You are a specialized agent instance.
 - Instance Name: {instance_name}
 - Agent Class: {agent_class}
-- Supervisor: CallAgentTool
-
-[MEMORY & LOGS]
-Your entire session is being recorded for long-term memory.
-- Log Path: {logger_inst.log_path}
-If you need to recall details from this or previous sessions that were compressed, you can check your logs.
+- Supervisor: {caller_name} ({caller_class})
 """
         # Ensure metadata is in sub-agent's prompt
         orig_sys = getattr(agent, 'system_message', "")
@@ -159,3 +159,50 @@ class DismissAgent(BaseTool):
 
         self.agent_pool.clear_conversation(instance_name)
         return f"Agent instance '{instance_name}' dismissed — conversation context cleared."
+
+
+@register_tool('list_agents', allow_overwrite=True)
+class ListAgents(BaseTool):
+    """Tool to list all available agent classes and their active instances."""
+
+    name = 'list_agents'
+    description = (
+        'List all available agent classes with their descriptions, '
+        'plus any active instances currently running or previously used.'
+    )
+    parameters = {
+        'type': 'object',
+        'properties': {},
+    }
+
+    def __init__(self, agent_pool=None, **kwargs):
+        super().__init__(**kwargs)
+        self.agent_pool = agent_pool
+
+    def call(self, params: str, **kwargs) -> str:
+        if not self.agent_pool:
+            return "Error: No agent pool available."
+
+        lines = ["# Available Agents\n"]
+        
+        for agent_name in self.agent_pool.list_agents():
+            info = self.agent_pool.get_agent_info(agent_name)
+            tagline = info.get('tagline', '') if info else ''
+            lines.append(f"## {agent_name}")
+            lines.append(f"  {tagline}")
+            
+            # Find active instances of this class
+            instances = [
+                inst for inst, cls in self.agent_pool.instance_classes.items()
+                if cls == agent_name
+            ]
+            if instances:
+                active_set = set(self.agent_pool.active_stack)
+                for inst in instances:
+                    status = "🟢 active" if inst in active_set else "⚪ idle"
+                    lines.append(f"  - {inst} ({status})")
+            else:
+                lines.append("  - No instances")
+            lines.append("")
+
+        return "\n".join(lines)

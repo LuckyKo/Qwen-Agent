@@ -73,6 +73,9 @@ class OperationManager:
 
         # File ownership tracking (still useful for context in approval UI)
         self.file_ownership: Dict[str, str] = {}
+        
+        # User toggleable timeout
+        self.enable_timeout: bool = True
 
     # ─── Auto-Approval for Agent-Owned Files ──────────────────────────────
 
@@ -122,7 +125,8 @@ class OperationManager:
             self.pending[request_id] = approval
 
         # Block until user responds or timeout
-        got_response = approval.event.wait(timeout=APPROVAL_TIMEOUT_SECONDS)
+        timeout_val = APPROVAL_TIMEOUT_SECONDS if self.enable_timeout else None
+        got_response = approval.event.wait(timeout=timeout_val)
 
         # Clean up
         with self._lock:
@@ -130,7 +134,7 @@ class OperationManager:
 
         if not got_response:
             # Timed out
-            return False, "Operation timed out waiting for user approval (5 min)."
+            return False, "User is AFK, try another method if possible"
 
         if approval.approved:
             return True, ""
@@ -428,6 +432,54 @@ class OperationManager:
                 del self.file_ownership[str(src_path)]
             self.file_ownership[str(dest_path)] = agent_name
             return f"APPROVED: Moved {source} to {destination}"
+        except Exception as e:
+            return f"ERROR: Approved but execution failed: {str(e)}"
+
+    def execute_shell_command(self, command: str, justification: str, agent_name: str) -> str:
+        """Execute a shell command — NEVER auto-approved, always requires user approval."""
+        description = f"Execute Shell Command:\n```bash\n{command}\n```\nJustification: {justification}"
+        
+        approved, reason = self.request_user_approval(
+            agent_name=agent_name,
+            tool_name='shell_cmd',
+            tool_args={'command': command, 'justification': justification},
+            description=description,
+        )
+        
+        if not approved:
+            return f"REJECTED BY USER: {reason}"
+            
+        try:
+            import subprocess
+            
+            # Execute the command in the workspace directory
+            result = subprocess.run(
+                command,
+                cwd=str(self.base_dir),
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=120  # Prevent hanging indefinitely
+            )
+            
+            output = ""
+            if result.stdout:
+                output += f"STDOUT:\n{result.stdout}\n"
+            if result.stderr:
+                output += f"STDERR:\n{result.stderr}\n"
+                
+            if result.returncode == 0:
+                status = "Command completed successfully."
+            else:
+                status = f"Command exited with return code {result.returncode}."
+                
+            if not output.strip():
+                output = "No output produced."
+                
+            return f"APPROVED: {status}\n\n{output}"
+            
+        except subprocess.TimeoutExpired:
+            return "ERROR: Command timed out after 120 seconds."
         except Exception as e:
             return f"ERROR: Approved but execution failed: {str(e)}"
 

@@ -1,60 +1,73 @@
+* Running on local URL:  http://127.0.0.1:7860
+
 To create a public link, set `share=True` in `launch()`.
-2026-03-08 08:47:31,633 - base.py - 785 - INFO - ALL tokens: 13, Available tokens: 31933
-2026-03-08 08:47:41,781 - base.py - 785 - INFO - ALL tokens: 6729, Available tokens: 31933
-2026-03-08 08:48:05,557 - base.py - 785 - INFO - ALL tokens: 7204, Available tokens: 31933
-2026-03-08 08:48:16,634 - base.py - 785 - INFO - ALL tokens: 7307, Available tokens: 32768
-2026-03-08 08:48:32,635 - base.py - 785 - INFO - ALL tokens: 7828, Available tokens: 31933
-2026-03-08 08:48:38,637 - web_ui.py - 715 - INFO - Orchestrator history was compressed. Syncing WebUI history.
+2026-03-09 23:16:42,994 - base.py - 785 - INFO - ALL tokens: 7, Available tokens: 31813
+2026-03-09 23:16:48,476 - base.py - 785 - INFO - ALL tokens: 48, Available tokens: 30975
+2026-03-09 23:16:55,991 - base.py - 785 - INFO - ALL tokens: 635, Available tokens: 30975
+2026-03-09 23:16:58,467 - simple_doc_parser.py - 432 - INFO - Start parsing usedatabrain.com/blog/data-visualization-python-libraries...
+2026-03-09 23:16:58,469 - utils.py - 89 - ERROR - Traceback (most recent call last):
+  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\simple_doc_parser.py", line 428, in call
+    parsed_file = self.db.get(cached_name_ori)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\storage.py", line 91, in get
+    raise KeyNotExistsError(f'Get Failed: {key} does not exist')
+qwen_agent.tools.storage.KeyNotExistsError: Get Failed: ee5dee382b18f6e8dd116ea9d0b79db94051a4e6562a9143e2563404d5df85e5_ori does not exist
+
+During handling of the above exception, another exception occurred:
+
 Traceback (most recent call last):
-  File "C:\Python312\Lib\site-packages\gradio\queueing.py", line 625, in process_events
-    response = await route_utils.call_process_api(
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\route_utils.py", line 322, in call_process_api
-    output = await app.get_blocks().process_api(
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\blocks.py", line 2137, in process_api
-    result = await self.call_function(
-             ^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\blocks.py", line 1675, in call_function
-    prediction = await utils.async_iteration(iterator)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 735, in async_iteration
-    return await anext(iterator)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 729, in __anext__
-    return await anyio.to_thread.run_sync(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\anyio\to_thread.py", line 56, in run_sync
-    return await get_async_backend().run_sync_in_worker_thread(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\anyio\_backends\_asyncio.py", line 2470, in run_sync_in_worker_thread
-    return await future
-           ^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\anyio\_backends\_asyncio.py", line 967, in run
-    result = context.run(func, *args)
-             ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 712, in run_sync_iterator_async
-    return next(iterator)
-           ^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\gradio\utils.py", line 873, in gen_wrapper
-    response = next(iterator)
-               ^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\gui\web_ui.py", line 595, in agent_run
-    for responses in agent_runner.run(_history, **self.run_kwargs):
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\utils\utils.py", line 263, in get_file_type
+    content = read_text_from_file(path)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\utils\utils.py", line 218, in read_text_from_file
+    with open(path, 'r', encoding='utf-8') as file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'usedatabrain.com/blog/data-visualization-python-libraries'
+
+Error in sub-agent TestResearcher:
+Error code: ValueError. Error message: Failed: The current parser does not support this file type! Supported types: pdf/docx/pptx/txt/html/csv/tsv/xlsx/xls
+Traceback (most recent call last):
+  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\simple_doc_parser.py", line 428, in call
+    parsed_file = self.db.get(cached_name_ori)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\storage.py", line 91, in get
+    raise KeyNotExistsError(f'Get Failed: {key} does not exist')
+qwen_agent.tools.storage.KeyNotExistsError: Get Failed: ee5dee382b18f6e8dd116ea9d0b79db94051a4e6562a9143e2563404d5df85e5_ori does not exist
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\simple_doc_parser.py", line 468, in call
+    raise ValueError(
+ValueError: Failed: The current parser does not support this file type! Supported types: pdf/docx/pptx/txt/html/csv/tsv/xlsx/xls
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "n:\work\WD\Qwen-Agent\agent_orchestrator.py", line 767, in _stream_sub_agent_call
+    for resp in agent.run(conv, agent_instance_name=instance_name):
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 124, in run
     for rsp in self._run(messages=new_messages, **kwargs):
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\agent_orchestrator.py", line 509, in _run
-    output_stream = self._call_llm(
-                    ^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 170, in _call_llm
-    return self.llm.chat(messages=messages,
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 197, in chat
-    messages = _truncate_input_messages_roughly(
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 627, in _truncate_input_messages_roughly
-    raise ModelServiceError(
-qwen_agent.llm.base.ModelServiceError:
-Error code: 400. Error message: The input messages (excluding the system message) must start with a user message.
+  File "n:\work\WD\Qwen-Agent\agent_orchestrator.py", line 579, in _run
+    tool_result = self._call_tool(
+                  ^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\agents\fncall_agent.py", line 120, in _call_tool
+    return super()._call_tool(tool_name, tool_args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 198, in _call_tool
+    raise ex
+  File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 196, in _call_tool
+    tool_result = tool.call(tool_args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\web_extractor.py", line 38, in call
+    parsed_web = SimpleDocParser().call({'url': url})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\simple_doc_parser.py", line 473, in call
+    raise DocParserError(code=exception_type, message=exception_message)
+qwen_agent.tools.simple_doc_parser.DocParserError:
+Error code: ValueError. Error message: Failed: The current parser does not support this file type! Supported types: pdf/docx/pptx/txt/html/csv/tsv/xlsx/xls
+2026-03-09 23:16:58,482 - base.py - 785 - INFO - ALL tokens: 255, Available tokens: 31813
+2026-03-09 23:17:03,444 - base.py - 785 - INFO - ALL tokens: 476, Available tokens: 31813
+2026-03-09 23:17:06,152 - base.py - 785 - INFO - ALL tokens: 32, Available tokens: 30763

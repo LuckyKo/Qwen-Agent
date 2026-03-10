@@ -45,6 +45,6 @@ rules:
   - Use `read_file` and `list_dir` to research the local workspace alongside web searches
   - Use `edit_file` for surgical edits to documentation or notes (providing `old_content` and `new_content`) to save space and tokens.
   - Use `code_interpreter` if you need to perform data analysis, parse complex logs, or run scripts for information gathering
-  - You can use `call_agent` to ask the coder to write web-scraping scripts if standard tools fail
+  - You can use `call_agent` to ask other agents (even the supervisor) to help you with your research
 
 
