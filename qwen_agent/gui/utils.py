@@ -12,29 +12,60 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from typing import Dict, List
 
 from qwen_agent.llm.schema import ASSISTANT, CONTENT, FUNCTION, NAME, REASONING_CONTENT, ROLE, SYSTEM, USER
 
-THINK = '''
-<details>
+THINK_OPEN = '''
+<details open>
   <summary>Thinking ...</summary>
+
 {thought}
+
 </details>
 '''
 
-TOOL_CALL = '''
+THINK_CLOSED = '''
+<details>
+  <summary>Thinking ...</summary>
+
+{thought}
+
+</details>
+'''
+
+TOOL_CALL_OPEN = '''
+<details open>
+  <summary>Start calling tool "{tool_name}" ...</summary>
+
+```json
+{tool_input}
+```
+
+</details>
+'''
+
+TOOL_CALL_CLOSED = '''
 <details>
   <summary>Start calling tool "{tool_name}" ...</summary>
+
+```json
 {tool_input}
+```
+
 </details>
 '''
 
 TOOL_OUTPUT = '''
 <details>
   <summary>Finished tool calling.</summary>
+
+```text
 {tool_output}
+```
+
 </details>
 
 '''
@@ -107,16 +138,25 @@ def convert_fncall_to_text(messages: List[Dict]) -> List[Dict]:
         elif role == ASSISTANT:
             if reasoning_content:
                 thought = reasoning_content
-                content = THINK.format(thought=thought) + content
+                # If there's reasoning content and we are at the end (could be streaming), keep it open?
+                # Usually reasoning_content is from DeepSeek, which is static up until the end, but let's be safe.
+                is_active = (msg == messages[-1])
+                t_tmpl = THINK_OPEN if is_active else THINK_CLOSED
+                content = t_tmpl.format(thought=thought) + content
 
             if '<think>' in content:
                 ti = content.find('<think>')
                 te = content.find('</think>')
+                is_thinking_active = False
                 if te == -1:
                     te = len(content)
+                    is_thinking_active = True
+                
                 thought = content[ti + len('<think>'):te]
+                t_tmpl = THINK_OPEN if is_thinking_active else THINK_CLOSED
+                
                 if thought.strip():
-                    _content = content[:ti] + THINK.format(thought=thought)
+                    _content = content[:ti] + t_tmpl.format(thought=thought)
                 else:
                     _content = content[:ti]
                 if te < len(content):
@@ -126,13 +166,23 @@ def convert_fncall_to_text(messages: List[Dict]) -> List[Dict]:
             fn_call = msg.get(f'{FUNCTION}_call', {})
             if fn_call:
                 f_name = fn_call['name']
-                f_args = fn_call['arguments']
-                content += TOOL_CALL.format(tool_name=f_name, tool_input=f_args)
+                # Try to parse and format gracefully
+                f_args_raw = fn_call['arguments']
+                try:
+                    f_args = json.dumps(json.loads(f_args_raw), indent=2, ensure_ascii=False)
+                except:
+                    f_args = f_args_raw
+                
+                # IMPORTANT: If this is the active message and no function result has arrived yet, keep the tab OPEN.
+                # Also, fn_call implies tool is running iff it's the last message
+                is_active_tool = (msg == messages[-1])
+                tc_tmpl = TOOL_CALL_OPEN if is_active_tool else TOOL_CALL_CLOSED
+                content += "\n" + tc_tmpl.format(tool_name=f_name, tool_input=f_args)
             
             # If the previous message was a function result, start a new bubble
             # even if the role is the same.
             if len(new_messages) > 0 and new_messages[-1][ROLE] == ASSISTANT and new_messages[-1][NAME] == name and not last_was_function:
-                new_messages[-1][CONTENT] += content
+                new_messages[-1][CONTENT] += "\n" + content
             else:
                 new_messages.append({ROLE: role, CONTENT: content, NAME: name})
             last_was_function = False

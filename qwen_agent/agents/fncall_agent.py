@@ -94,6 +94,8 @@ class FnCallAgent(Agent):
                 for out in output:
                     use_tool, tool_name, tool_args, _ = self._detect_tool(out)
                     if use_tool:
+                        # Yield everything so far so UI sees "calling tool..." before we block on execution
+                        yield response
                         tool_result = self._call_tool(tool_name, tool_args, messages=messages, **kwargs)
                         fn_msg = Message(role=FUNCTION,
                                          name=tool_name,

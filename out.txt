@@ -1,73 +1,63 @@
-* Running on local URL:  http://127.0.0.1:7860
-
-To create a public link, set `share=True` in `launch()`.
-2026-03-09 23:16:42,994 - base.py - 785 - INFO - ALL tokens: 7, Available tokens: 31813
-2026-03-09 23:16:48,476 - base.py - 785 - INFO - ALL tokens: 48, Available tokens: 30975
-2026-03-09 23:16:55,991 - base.py - 785 - INFO - ALL tokens: 635, Available tokens: 30975
-2026-03-09 23:16:58,467 - simple_doc_parser.py - 432 - INFO - Start parsing usedatabrain.com/blog/data-visualization-python-libraries...
-2026-03-09 23:16:58,469 - utils.py - 89 - ERROR - Traceback (most recent call last):
-  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\simple_doc_parser.py", line 428, in call
-    parsed_file = self.db.get(cached_name_ori)
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\storage.py", line 91, in get
-    raise KeyNotExistsError(f'Get Failed: {key} does not exist')
-qwen_agent.tools.storage.KeyNotExistsError: Get Failed: ee5dee382b18f6e8dd116ea9d0b79db94051a4e6562a9143e2563404d5df85e5_ori does not exist
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "n:\work\WD\Qwen-Agent\qwen_agent\utils\utils.py", line 263, in get_file_type
-    content = read_text_from_file(path)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\utils\utils.py", line 218, in read_text_from_file
-    with open(path, 'r', encoding='utf-8') as file:
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: 'usedatabrain.com/blog/data-visualization-python-libraries'
-
-Error in sub-agent TestResearcher:
-Error code: ValueError. Error message: Failed: The current parser does not support this file type! Supported types: pdf/docx/pptx/txt/html/csv/tsv/xlsx/xls
-Traceback (most recent call last):
-  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\simple_doc_parser.py", line 428, in call
-    parsed_file = self.db.get(cached_name_ori)
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\storage.py", line 91, in get
-    raise KeyNotExistsError(f'Get Failed: {key} does not exist')
-qwen_agent.tools.storage.KeyNotExistsError: Get Failed: ee5dee382b18f6e8dd116ea9d0b79db94051a4e6562a9143e2563404d5df85e5_ori does not exist
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\simple_doc_parser.py", line 468, in call
-    raise ValueError(
-ValueError: Failed: The current parser does not support this file type! Supported types: pdf/docx/pptx/txt/html/csv/tsv/xlsx/xls
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "n:\work\WD\Qwen-Agent\agent_orchestrator.py", line 767, in _stream_sub_agent_call
-    for resp in agent.run(conv, agent_instance_name=instance_name):
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 124, in run
-    for rsp in self._run(messages=new_messages, **kwargs):
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\agent_orchestrator.py", line 579, in _run
-    tool_result = self._call_tool(
-                  ^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\agents\fncall_agent.py", line 120, in _call_tool
-    return super()._call_tool(tool_name, tool_args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 198, in _call_tool
-    raise ex
-  File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 196, in _call_tool
-    tool_result = tool.call(tool_args, **kwargs)
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\web_extractor.py", line 38, in call
-    parsed_web = SimpleDocParser().call({'url': url})
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\tools\simple_doc_parser.py", line 473, in call
-    raise DocParserError(code=exception_type, message=exception_message)
-qwen_agent.tools.simple_doc_parser.DocParserError:
-Error code: ValueError. Error message: Failed: The current parser does not support this file type! Supported types: pdf/docx/pptx/txt/html/csv/tsv/xlsx/xls
-2026-03-09 23:16:58,482 - base.py - 785 - INFO - ALL tokens: 255, Available tokens: 31813
-2026-03-09 23:17:03,444 - base.py - 785 - INFO - ALL tokens: 476, Available tokens: 31813
-2026-03-09 23:17:06,152 - base.py - 785 - INFO - ALL tokens: 32, Available tokens: 30763
+[DEBUG] Sub-agent CodeQualityReviewer yielding token...
+2026-03-11 09:17:42,751 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
+2026-03-11 09:17:42,751 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7516043
+[DEBUG] Sub-agent CodeQualityReviewer yielding token...
+2026-03-11 09:17:42,751 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
+2026-03-11 09:17:42,752 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7526033
+[DEBUG] Sub-agent CodeQualityReviewer yielding token...
+2026-03-11 09:17:42,752 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
+2026-03-11 09:17:42,752 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7526033
+[DEBUG] Sub-agent CodeQualityReviewer yielding token...
+2026-03-11 09:17:42,753 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
+2026-03-11 09:17:42,753 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.753621
+[DEBUG] Sub-agent CodeQualityReviewer yielding token...
+2026-03-11 09:17:42,754 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
+2026-03-11 09:17:42,754 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7544045
+[DEBUG] Sub-agent CodeQualityReviewer yielding token...
+2026-03-11 09:17:42,754 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
+2026-03-11 09:17:42,754 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7549236
+[DEBUG] Sub-agent CodeQualityReviewer yielding token...
+2026-03-11 09:17:42,755 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
+2026-03-11 09:17:42,755 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.75592
+2026-03-11 09:17:42,756 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.756921
+2026-03-11 09:17:42,756 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
+2026-03-11 09:17:42,771 - agent_orchestrator.py - 582 - INFO - LLM Call Order: ['system', 'user', 'assistant', 'assistant', 'function', 'assistant', 'assistant', 'function']
+2026-03-11 09:17:42,774 - base.py - 785 - INFO - ALL tokens: 799, Available tokens: 31220
+2026-03-11 09:17:44,402 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4023054
+2026-03-11 09:17:44,402 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
+2026-03-11 09:17:44,412 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4129322
+2026-03-11 09:17:44,412 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:44,431 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4311128
+2026-03-11 09:17:44,432 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:44,462 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4622395
+2026-03-11 09:17:44,463 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:44,493 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4925184
+2026-03-11 09:17:44,493 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:44,495 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4955146
+2026-03-11 09:17:44,496 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:44,524 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.524029
+2026-03-11 09:17:44,524 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
+2026-03-11 09:17:44,571 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.5712793
+2026-03-11 09:17:44,571 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:44,632 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.6320524
+2026-03-11 09:17:44,632 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
+2026-03-11 09:17:44,664 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.6641257
+2026-03-11 09:17:55,917 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:55,919 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213475.9196146
+2026-03-11 09:17:55,919 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:55,977 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213475.9778616
+2026-03-11 09:17:55,978 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
+2026-03-11 09:17:55,987 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213475.9873736
+2026-03-11 09:17:55,987 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:56,103 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.103574
+2026-03-11 09:17:56,103 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
+2026-03-11 09:17:56,116 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.1160386
+2026-03-11 09:17:56,117 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:56,118 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.1186442
+2026-03-11 09:17:56,118 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:56,119 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.119644
+2026-03-11 09:17:56,119 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:56,120 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.120644
+2026-03-11 09:17:56,120 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
+2026-03-11 09:17:56,120 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.120644
+2026-03-11 09:17:56,121 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.121644

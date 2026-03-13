@@ -11,14 +11,12 @@ User Approval System:
 import copy
 import os
 import json
-import logging
 import datetime
 import time
-from qwen_agent.agents import Assistant
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
-
-logger = logging.getLogger(__name__)
+from qwen_agent.agents import Assistant
+from qwen_agent.log import logger
 
 from qwen_agent.llm.schema import (
     ASSISTANT,
@@ -210,7 +208,7 @@ rules:
         self.instance_classes.clear()
         self.instance_loggers.clear()
         self.sub_agent_state.clear()
-        self.stopped = False
+        self.active_stack.clear()
         logger.info("AgentPool reset — all instances and loggers cleared.")
     
     def _apply_context_compression(self, agent_name: str, summary: str, fraction: float, agent_obj: Optional[Assistant] = None):
@@ -342,11 +340,11 @@ CALL_AGENT_SCHEMA = {
         'properties': {
             'agent_class': {
                 'type': 'string',
-                'description': 'The class of agent to call (e.g. "coder", "researcher", "writer")'
+                'description': 'The class of agent to call (e.g. "coder", "researcher"). Only required when starting a NEW instance.'
             },
             'instance_name': {
                 'type': 'string',
-                'description': 'A unique name for this agent instance. Use this to continue the session later.'
+                'description': 'A unique name for this agent instance. If this name exists, the existing session is continued regardless of agent_class.'
             },
             'task': {
                 'type': 'string',
@@ -413,7 +411,7 @@ class OrchestratorAgent(Assistant):
         super().__init__(**kwargs)
         self.agent_pool = agent_pool
         self.agent_type = agent_type
-        self.session_name: str = "MainSession"
+        self.session_name: str = "Maine"
         from qwen_agent.utils.tokenization_qwen import count_tokens
         self._count_tokens = count_tokens
 
@@ -464,19 +462,19 @@ class OrchestratorAgent(Assistant):
         knowledge: str = '',
         **kwargs,
     ) -> Iterator[List[Message]]:
+        # Clear active stack only for the root turn to avoid state leakage
+        if not kwargs.get('agent_instance_name'):
+            self.agent_pool.active_stack.clear()
+        
         # Prepend knowledge like Assistant does
         messages = self._prepend_knowledge_prompt(
             messages=messages, lang=lang, knowledge=knowledge, **kwargs
         )
         
-        # Identity formatting: "[Role] [Instance/SessionName]"
+        # Identity formatting: Use only the instance name for sessions
         instance = kwargs.get('agent_instance_name') or self.session_name
-        full_name = self.name
-        if instance:
-            if not full_name.lower().endswith(instance.lower()):
-                full_name = f"{self.agent_type} {instance}"
-        
-        self.name = full_name # Update for UI display
+        self.session_name = instance # Track current instance name
+        # DO NOT update self.name = instance; it breaks WebUI indexing which relies on static agent names.
         
         # Prepare appropriate logger (Main Session or Sub-Agent Instance)
         # Using the base agent_type for the class metadata field keeps logs clean.
@@ -496,7 +494,7 @@ class OrchestratorAgent(Assistant):
                     # 1. Start of prompt (standard Assistant)
                     # 2. After [IDENTITY] block (sub-agent instance call)
                     pattern = rf"(?i)You are {self.agent_type}\."
-                    new_intro = f"You are {self.agent_type} {instance}."
+                    new_intro = f"You are {instance}."
                     
                     if re.search(pattern, m0_content):
                         m0_content = re.sub(pattern, new_intro, m0_content, count=1)
@@ -613,6 +611,8 @@ class OrchestratorAgent(Assistant):
                     continue
 
                 used_any_tool = True
+                # Yield the tool call request immediately so UI sees "calling tool..."
+                yield response
 
                 if tool_name in self.STREAMING_TOOLS:
                     # ── Streaming sub-agent call ──
@@ -696,7 +696,7 @@ class OrchestratorAgent(Assistant):
 
         instance_name = args.get('instance_name', '')
         agent_class = args.get('agent_class', '')
-        
+
         # Prevent state corruption when an agent calls ITSELF recursively.
         # If the instance is already in the stack, cloning its state ensures
         # that the outer caller's 'conv' doesn't get polluted by inner messages, 
@@ -713,11 +713,20 @@ class OrchestratorAgent(Assistant):
                 clone_conv.extend(copy.deepcopy(current_response))
             self.agent_pool.instance_conversations[instance_name] = clone_conv
 
-        # 1. Resolve agent class and instance
-        if not agent_class:
-            agent_class = self.agent_pool.instance_classes.get(instance_name)
-            if not agent_class:
-                return f"Error: No active instance named '{instance_name}'. Provide agent_class to start one."
+        # 1. Resolve agent class and isolation
+        existing_class = self.agent_pool.instance_classes.get(instance_name)
+        
+        # If the requested class is different from the existing one,
+        # we MUST clear history to avoid confusing context mix-ups (stacking).
+        if existing_class and agent_class and existing_class != agent_class:
+            logger.info(f"Class mismatch for '{instance_name}': {existing_class} -> {agent_class}. Clearing history.")
+            self.agent_pool.clear_conversation(instance_name)
+            existing_class = None # Trigger fresh initialization
+            
+        if existing_class:
+            agent_class = existing_class
+        elif not agent_class:
+            return f"Error: No active instance named '{instance_name}'. Provide agent_class to start one."
         
         # Register/Confirm instance class
         self.agent_pool.instance_classes[instance_name] = agent_class
@@ -741,14 +750,14 @@ class OrchestratorAgent(Assistant):
         lines = base_sys.strip().split('\n')
         
         if lines:
-            # 1. Update the first line: "You are [Role]." -> "You are [Role] [Instance]."
+            # 1. Update the first line: "You are [Role]." -> "You are [Instance]."
             if lines[0].startswith("You are") and f" {instance_name}" not in lines[0]:
-                lines[0] = lines[0].replace(".", f" {instance_name}.", 1)
+                lines[0] = f"You are {instance_name}."
             
             # 2. Insert session metadata after the tagline (usually line 2)
             metadata_block = [
                 "## Session Metadata",
-                f"- Supervisor: {self.name} ({self.__class__.__name__})",
+                f"- Supervisor: {self.session_name}",
                 f"- Log Path: {logger_inst.log_path}",
                 "Use your logs to recall details from turns that were compressed.\n"
             ]
@@ -781,7 +790,7 @@ class OrchestratorAgent(Assistant):
         task = args.get('task', '')
         context = args.get('context', '')
         
-        caller_prefix = f"This is a message from {self.name}."
+        caller_prefix = f"This is a message from {self.session_name}."
         if context:
             context = f"{caller_prefix}\n{context}"
         else:
@@ -829,6 +838,14 @@ class OrchestratorAgent(Assistant):
 
         # streaming status is updated during the run
 
+        # Initialize sub-agent chat for new turn
+        # This block is from web_ui.py, not agent_orchestrator.py.
+        # The instruction to reset self._last_active_sa, _last_stack_top, and _last_rendered_sa
+        # applies to the agent_run method in web_ui.py, not here.
+        # The provided code snippet for the change is a mix of files.
+        # I will only apply the change to agent_orchestrator.py as per the first part of the instruction.
+        # The second part of the instruction for web_ui.py cannot be applied here.
+
         conv = self.agent_pool.get_conversation(instance_name)
         user_msg = {ROLE: USER, CONTENT: sub_agent_msg_content}
         conv.append(user_msg)
@@ -845,22 +862,31 @@ class OrchestratorAgent(Assistant):
             'agent_name': f"{instance_name} ({agent_class})",
             'messages': copy.deepcopy(conv),
         }
+        # Overwrite any existing state for this instance
         self.agent_pool.sub_agent_state[instance_name] = state
+
+        # Force an immediate yield so the WebUI detects the new active_stack entry
+        # and switches the subagent window context immediately.
+        yield current_response
 
         # Run the sub-agent as a generator
         final_resp: list = []
         try:
+            # agent.run mutates the passed list, so we pass a copy to avoid double-appending
+            # when we do state['messages'] = conv + resp
+            run_conv = copy.deepcopy(conv)
+            
             # Pass instance name through kwargs so tools (like compress_context) know who they are contextually
-            for resp in agent.run(conv, agent_instance_name=instance_name):
+            for resp in agent.run(run_conv, agent_instance_name=instance_name):
                 if self.agent_pool.stopped:
                     logger.info(f"Sub-agent {instance_name} interrupted by user stop signal.")
                     yield current_response
                     break
                     
                 final_resp = resp
-                
+
                 # Update streaming state for WebUI
-                state['messages'] = conv + resp
+                state['messages'] = list(conv) + list(resp)
                 yield current_response
                 
                 # Efficient logging: check if a tool call was just completed
@@ -868,24 +894,9 @@ class OrchestratorAgent(Assistant):
                     # Log full conversation snapshot on tool events
                     logger_inst.update_history(conv + resp)
                     
-                    # Check if context compression occurred during this tool call.
-                    # The `AgentPool.get_conversation` list will have shrunk.
-                    pool_history = self.agent_pool.get_conversation(instance_name)
-                    if pool_history and len(pool_history) < len(conv):
-                        logger.info(f"Context compression detected in sub-agent {instance_name}. Syncing orchestrator history.")
-                        
-                        # The `resp` array holds the NEW messages from this current active turn.
-                        # The `conv` array holds the OLD history from before this turn started.
-                        # Since the tool compressed the AgentPool, we just need to make `conv` match
-                        # the newly compressed history list, minus the currently active `resp` elements
-                        # (which are usually appended at the very end of the pool history by the tool).
-                        
-                        # Actually, our compression tool replaces the pool history with the new summary + old messages.
-                        # Since `resp` hasn't been added to the pool yet, `pool_history` IS exactly what `conv` should be!
-                        conv.clear()
-                        conv.extend(pool_history)
+                    # Note: Context compression mutates the pool history object in-place,
+                    # and 'conv' is a reference to that object, so it stays in sync automatically.
 
-            
             if final_resp:
                 # IMPORTANT: Update the persistent conversation instance with the FULL TURN result.
                 # This ensures the next turn (or next 'call_agent') sees the tool results.

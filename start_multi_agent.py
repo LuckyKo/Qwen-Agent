@@ -233,6 +233,7 @@ if __name__ == '__main__':
         ],
         'user.name': 'You',
         'available_tools': ALL_BUILTIN_TOOLS,
+        'verbose': False,
     }
 
     # Launch WebUI with orchestrator as the main agent

@@ -58,18 +58,50 @@ class ReadFile(BaseTool):
 
             total_lines = len(lines)
             start_idx = max(0, start_line - 1)
+            
+            # --- Estimate Hard Character Limit ---
+            # 1/4 of context. Context estimate: max_input_tokens * 4 chars.
+            # So limit is roughly max_input_tokens characters.
+            max_input_tokens = 58000
+            if hasattr(self, 'agent_pool') and self.agent_pool:
+                llm_cfg = getattr(self.agent_pool, 'llm_cfg', {})
+                max_input_tokens = llm_cfg.get('generate_cfg', {}).get('max_input_tokens', 58000)
+            
+            char_limit = max_input_tokens
+            # --- End Estimate ---
+
             end_idx = min(total_lines, start_idx + limit)
+            
+            # Build content iteratively to respect character limit
+            content_lines = []
+            current_chars = 0
+            actual_end_idx = start_idx
+            
+            hard_limit_reached = False
+            for i in range(start_idx, end_idx):
+                line_text = f"{i+1}: {lines[i]}"
+                if current_chars + len(line_text) > char_limit:
+                    hard_limit_reached = True
+                    break
+                content_lines.append(line_text)
+                current_chars += len(line_text)
+                actual_end_idx = i + 1
 
-            subset = lines[start_idx:end_idx]
-            content = "".join([f"{i+start_idx+1}: {line}" for i, line in enumerate(subset)])
-
-            header = f"File content ({path}), lines {start_idx+1} to {end_idx} of {total_lines}:"
-            if end_idx < total_lines:
-                header += f" [TRUNCATED - see note at bottom for more]"
+            content = "".join(content_lines)
+            header = f"File content ({path}), lines {start_idx+1} to {actual_end_idx} of {total_lines}:"
+            
+            if actual_end_idx < total_lines:
+                header += f" [TRUNCATED]"
+                if hard_limit_reached:
+                    header += " [HARD LIMIT REACHED]"
 
             msg = f"{header}\n```\n{content}\n```"
-            if end_idx < total_lines:
-                msg += f"\n\n[PAGINATION NOTE: This file is large. Use read_file with start_line={end_idx+1} to read the next {min(limit, total_lines - end_idx)} lines.]"
+            
+            if actual_end_idx < total_lines:
+                if hard_limit_reached:
+                    msg += f"\n\n[CRITICAL: Hard character limit of {char_limit} reached to prevent context overflow. Only {actual_end_idx - start_idx} lines were read. Use start_line={actual_end_idx+1} to read the next chunk.]"
+                else:
+                    msg += f"\n\n[PAGINATION NOTE: This file is large. Use read_file with start_line={actual_end_idx+1} to read the next {min(limit, total_lines - actual_end_idx)} lines.]"
 
             return msg
         except Exception as e:

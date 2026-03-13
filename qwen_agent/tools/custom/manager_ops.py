@@ -54,11 +54,20 @@ class CallAgent(BaseTool):
         if not agent:
             return f"Error: Agent class '{agent_class}' not found. Available: {self.agent_pool.list_agents()}"
 
-        # Register instance class
-        self.agent_pool.instance_classes[instance_name] = agent_class
-
         # Prepare sub-agent logger
         logger_inst = self.agent_pool.get_logger(instance_name, agent_class)
+        
+        # Isolation Safeguard: If this instance exists but was a DIFFERENT class, 
+        # clear its history to avoid confusing stacking/context merging.
+        existing_class = self.agent_pool.instance_classes.get(instance_name)
+        if existing_class and existing_class != agent_class:
+            logger_inst.info(f"Re-assigning instance '{instance_name}' from {existing_class} to {agent_class}. Clearing history.")
+            self.agent_pool.clear_conversation(instance_name)
+            # Re-get logger after clear
+            logger_inst = self.agent_pool.get_logger(instance_name, agent_class)
+
+        # Register instance class
+        self.agent_pool.instance_classes[instance_name] = agent_class
         
         # Identify the caller (supervisor)
         caller = kwargs.get('agent_obj')

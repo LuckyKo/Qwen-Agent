@@ -39,59 +39,95 @@ def build_system_prompt(config: dict) -> str:
     Returns:
         Formatted system prompt string
     """
+    system_prompt = f"You are {config.get('name', 'Assistant')}.\n"
+    if config.get('tagline'):
+        system_prompt += f"{config.get('tagline')}\n"
+    
+    # 1. Identity section
     identity = config.get('identity', {})
-    communication = config.get('communication', {})
+    if identity:
+        system_prompt += "\n## Who You Are\n"
+        if identity.get('background'):
+            system_prompt += f"{identity.get('background').strip()}\n"
+        
+        traits = identity.get('personality_traits', [])
+        if traits:
+            system_prompt += "\nPersonality traits:\n"
+            for trait in traits:
+                system_prompt += f"- {trait}\n"
+    
+    # 2. Communication style
+    comm = config.get('communication', {})
+    if comm:
+        system_prompt += "\n## How You Communicate\n"
+        if comm.get('tone'):
+            system_prompt += f"Tone: {comm.get('tone')}\n"
+        
+        notes = comm.get('style_notes', [])
+        if notes:
+            system_prompt += "\nStyle guidelines:\n"
+            for note in notes:
+                system_prompt += f"- {note}\n"
+
+    # 3. Features / Capabilities
+    cap = config.get('capabilities', {})
+    if cap:
+        tools = cap.get('tools', [])
+        if tools:
+            system_prompt += "\n## Your Tools\nYou have access to these tools:\n"
+            for tool in tools:
+                system_prompt += f"- **{tool}**: Use when you need to {get_tool_description(tool)}\n"
+
+    # 4. Rules
     rules = config.get('rules', [])
-    capabilities = config.get('capabilities', {})
-    notes = config.get('notes', '')
-    
-    # Build identity section
-    system_prompt = f"""You are {config.get('name', 'Assistant')}.
-{config.get('tagline', '')}
+    if rules:
+        system_prompt += "\n## Your Rules\n"
+        for i, rule in enumerate(rules, 1):
+            if isinstance(rule, dict):
+                # Handle cases where YAML still parses as dict (legacy/unquoted)
+                for k, v in rule.items():
+                    system_prompt += f"{i}. {k}: {v}\n"
+            else:
+                system_prompt += f"{i}. {rule}\n"
 
-## Who You Are
-{identity.get('background', '')}
+    # 5. Dynamic Sections (Anything else in the YAML that isn't handled above)
+    handled_keys = {'name', 'tagline', 'identity', 'communication', 'rules', 'capabilities', 'notes', 'remember'}
+    
+    for key, value in config.items():
+        if key in handled_keys:
+            continue
+            
+        # Format key to Title Case (e.g., operation_workflow -> Operation Workflow)
+        section_title = key.replace('_', ' ').title()
+        system_prompt += f"\n## {section_title}\n"
+        
+        def format_value(v, indent=0):
+            res = ""
+            spacing = "  " * indent
+            if isinstance(v, list):
+                for item in v:
+                    if isinstance(item, (list, dict)):
+                        res += f"{spacing}- {format_value(item, indent + 1).strip()}\n"
+                    else:
+                        res += f"{spacing}- {item}\n"
+            elif isinstance(v, dict):
+                for k, val in v.items():
+                    k_title = str(k).replace('_', ' ').title()
+                    if isinstance(val, (list, dict)):
+                        res += f"{spacing}### {k_title}\n{format_value(val, indent)}\n"
+                    else:
+                        res += f"{spacing}**{k_title}**: {val}\n"
+            else:
+                res += f"{spacing}{v}\n"
+            return res
 
-Personality traits:
-"""
-    
-    for trait in identity.get('personality_traits', []):
-        system_prompt += f"- {trait}\n"
-    
-    # Communication style
-    system_prompt += f"""
-## How You Communicate
-Tone: {communication.get('tone', 'Friendly and helpful')}
+        system_prompt += format_value(value)
 
-Style guidelines:
-"""
-    
-    for note in communication.get('style_notes', []):
-        system_prompt += f"- {note}\n"
-    
-    # Tools available
-    tools = capabilities.get('tools', [])
-    if tools:
-        system_prompt += f"""
-## Your Tools
-You have access to these tools:
-"""
-        for tool in tools:
-            system_prompt += f"- **{tool}**: Use when you need to {get_tool_description(tool)}\n"
-    
-    # Rules
-    system_prompt += f"""
-## Your Rules
-"""
-    for i, rule in enumerate(rules, 1):
-        system_prompt += f"{i}. {rule}\n"
-    
-    # Special notes
-    if notes:
-        system_prompt += f"""
-## Remember
-{notes.strip()}
-"""
+    # 6. Final Notes / Remember
+    final_notes = config.get('notes') or config.get('remember')
+    if final_notes:
+        system_prompt += "\n## Remember\n"
+        system_prompt += f"{final_notes.strip()}\n"
     
     return system_prompt
 

@@ -56,6 +56,7 @@ class WebUI:
 
         user_name = chatbot_config.get('user.name', 'user')
         self._last_active_sa = None
+        self._last_rendered_sa = None  # Track what agent was last rendered in sub-chatbot
 
         self.user_config = {
             'name': user_name,
@@ -96,6 +97,7 @@ class WebUI:
             self.all_available_tools.update(config_available_tools)
             
         self.all_available_tools = sorted(list(self.all_available_tools))
+        self._sanitized_cache = {}
 
     """
     Run the chatbot.
@@ -181,22 +183,22 @@ class WebUI:
                             type="filepath"
                         )
                     
-                    # Sub-agent conversation panel (visible when manager delegates)
+                    # Sub-agent conversation panel
+                    NUM_SUB_SLOTS = 5
+                    sub_tabs = []
+                    sub_chatbots = []
+                    sub_statuses = []
+                    
                     with gr.Column(scale=2, visible=(len(self.agent_list) > 1)) as sub_agent_panel:
-                        sub_chatbot = mgr.Chatbot(
-                            value=[],
-                            label='🔄 Sub-Agent Activity',
-                            height=700,
-                            avatar_image_width=60,
-                            flushing=False,
-                            show_copy_button=True,
-                        )
-                        sub_agent_status = gr.Textbox(
-                            label='Status',
-                            value='Ready',
-                            interactive=False,
-                            lines=2
-                        )
+                        slot_map = gr.State({}) # Keep track of which instance_name maps to which index (0-4)
+                        with gr.Tabs() as sub_agent_tabs:
+                            for i in range(NUM_SUB_SLOTS):
+                                with gr.TabItem(f"Slot {i+1}", visible=False, id=f"sub_tab_{i}") as tab:
+                                    sub_tabs.append(tab)
+                                    cb = gr.Chatbot(value=[], label='Sub-Agent Activity', height=700, show_copy_button=True, type="tuples", show_share_button=False)
+                                    sub_chatbots.append(cb)
+                                    st = gr.Textbox(label='Status', value='Ready', interactive=False, lines=2)
+                                    sub_statuses.append(st)
 
                     with gr.Column(scale=1):
                         if len(self.agent_list) > 1:
@@ -213,7 +215,7 @@ class WebUI:
                         session_name = gr.Textbox(
                             label='Session Name',
                             placeholder='Enter session identifier (e.g. CoderSession)',
-                            value='MainSession',
+                            value='Maine',
                             interactive=True,
                             elem_id="session_name_input"
                         )
@@ -272,15 +274,15 @@ class WebUI:
                     if len(self.agent_list) > 1:
                         agent_selector.change(
                             fn=self.change_agent,
-                            inputs=[agent_selector],
-                            outputs=[agent_selector, agent_info_block, agent_plugins_block],
+                            inputs=[agent_selector, slot_map] + sub_chatbots + sub_statuses,
+                            outputs=[agent_selector, agent_info_block, agent_plugins_block, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                             queue=False,
                         )
 
                     input_promise = input.submit(
                         fn=self.add_text,
-                        inputs=[input, audio_input, chatbot, history],
-                        outputs=[input, audio_input, chatbot, history],
+                        inputs=[input, audio_input, chatbot, history, slot_map] + sub_chatbots + sub_statuses,
+                        outputs=[input, audio_input, chatbot, history, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                         queue=True,
                     )
 
@@ -292,16 +294,16 @@ class WebUI:
                             queue=True,
                         ).then(
                             self.agent_run,
-                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
-                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
+                            [chatbot, history, agent_selector, slot_map] + sub_chatbots + sub_statuses,
+                            [chatbot, history, agent_selector, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                             queue=True,
                         )
                     elif len(self.agent_list) > 1:
                         # Multiple agents but mention disabled - still pass agent_selector
                         input_promise = input_promise.then(
                             self.agent_run,
-                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status, session_name],
-                            [chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
+                            [chatbot, history, agent_selector, slot_map] + sub_chatbots + sub_statuses + [session_name],
+                            [chatbot, history, agent_selector, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                             queue=True,
                         )
                     else:
@@ -356,14 +358,14 @@ class WebUI:
                     
                     retry_promise = retry_btn.click(
                         fn=self.retry_chat,
-                        inputs=[chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
-                        outputs=[chatbot, history, agent_selector, sub_chatbot, sub_agent_status],
+                        inputs=[chatbot, history, agent_selector, slot_map] + sub_chatbots + sub_statuses,
+                        outputs=[chatbot, history, agent_selector, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                     )
                     
                     reset_btn.click(
                         fn=self.reset_chat,
-                        inputs=[agent_selector],
-                        outputs=[chatbot, history, sub_chatbot, sub_agent_status],
+                        inputs=[agent_selector, slot_map] + sub_chatbots + sub_statuses,
+                        outputs=[chatbot, history, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                         queue=False,
                     )
 
@@ -373,10 +375,25 @@ class WebUI:
                                                                        server_name=server_name,
                                                                        server_port=server_port)
 
+    def _parse_slots(self, args):
+        from qwen_agent.gui.gradio_dep import gr
+        num_slots = 5
+        # Since Tabs cannot be inputs, they are no longer in args.
+        # We return gr.update() for them so they can be in outputs.
+        tabs = [gr.update() for _ in range(num_slots)]
+        tabs_container = gr.update()  # For the gr.Tabs
+        chatbots = list(args[:num_slots])
+        statuses = list(args[num_slots:2*num_slots])
+        remaining = args[2*num_slots:]
+        return tabs, tabs_container, chatbots, statuses, remaining
+
     def _sanitize_content(self, text: str) -> str:
         """Prevent Gradio crash by disabling links to local directories."""
         if not text or not isinstance(text, str):
             return text
+            
+        if text in self._sanitized_cache:
+            return self._sanitized_cache[text]
             
         def is_dir(path):
             try:
@@ -402,7 +419,7 @@ class WebUI:
             return match.group(0)
 
         # Regex for markdown links: [label](path)
-        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_dir_link, text)
+        processed = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_dir_link, text)
         
         # 2. Handle raw absolute paths that might be auto-linkified by ModelScope
         def replace_raw_dir(match):
@@ -419,16 +436,34 @@ class WebUI:
 
         # Regex for Windows paths (C:\...) or Unix-style absolute paths ( /... )
         raw_path_pattern = r'(?:[a-zA-Z]:\\[^\s"\'<>|]+|/(?:[^/\s"\'<>|]+/)+[^\s"\'<>|]*)'
-        sanitized = re.sub(raw_path_pattern, replace_raw_dir, text)
+        sanitized = re.sub(raw_path_pattern, replace_raw_dir, processed)
+        
+        # Cache management: avoid memory leaks if cache grows too large
+        if len(self._sanitized_cache) > 1000:
+            self._sanitized_cache.clear()
+        self._sanitized_cache[text] = sanitized
         
         return sanitized
 
-    def change_agent(self, agent_selector):
+    def change_agent(self, agent_selector, _slot_map, *args):
         # Restore original function map when switching agents
         if agent_selector in self.original_function_maps:
             self.agent_list[agent_selector].function_map = self.original_function_maps[agent_selector]
-        yield agent_selector, self._create_agent_info_block(agent_selector), self._get_agent_tools_update(
-            agent_selector)
+        
+        tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
+
+        # [agent_selector, agent_info_block, agent_plugins_block, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses
+        res = [
+            agent_selector,
+            self._create_agent_info_block(agent_selector),
+            self._get_agent_tools_update(agent_selector),
+            _slot_map,
+            tabs_container
+        ]
+        res.extend(tabs)
+        res.extend(sub_chatbots)
+        res.extend(sub_statuses)
+        yield tuple(res)
 
     def toggle_tools(self, selected_tools, agent_selector=None):
         """Update the agent's available tools based on user selection with cross-agent discovery."""
@@ -479,7 +514,7 @@ class WebUI:
             
         yield self._get_agent_tools_update(agent_selector)
 
-    def add_text(self, _input, _audio_input, _chatbot, _history):
+    def add_text(self, _input, _audio_input, _chatbot, _history, _slot_map, *args):
         _history.append({
             ROLE: USER,
             CONTENT: [{
@@ -510,8 +545,14 @@ class WebUI:
         _chatbot.append([_input, None])
 
         from qwen_agent.gui.gradio_dep import gr
+        tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
 
-        yield gr.update(interactive=False, value=None), None, _chatbot, _history
+        # [input, audio_input, chatbot, history, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses
+        res = [gr.update(interactive=False, value=None), None, _chatbot, _history, _slot_map, tabs_container]
+        res.extend(tabs)
+        res.extend(sub_chatbots)
+        res.extend(sub_statuses)
+        yield tuple(res)
 
     def add_mention(self, _chatbot, _agent_selector):
         if len(self.agent_list) == 1:
@@ -529,13 +570,13 @@ class WebUI:
 
         yield _chatbot, _agent_selector
 
-    def reset_chat(self, _agent_selector=None):
+    def reset_chat(self, _agent_selector, _slot_map, *args):
         """Reset the conversation state."""
+        from qwen_agent.gui.gradio_dep import gr
         # Clear main history and chatbot
         _history = []
         _chatbot = []
-        _sub_chatbot = []
-        _sub_status = "Ready"
+        _slot_map = {} # Clear slot mapping
 
         # If we have an OrchestratorAgent, clearing the internal history is important
         if _agent_selector is not None:
@@ -545,7 +586,16 @@ class WebUI:
                 # Full reset of all sub-agent instances and loggers in the pool
                 _agent_pool.reset()
 
-        return _chatbot, _history, _sub_chatbot, _sub_status
+        tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
+        
+        # Reset all slots to invisible and empty
+        res = [_chatbot, _history, _slot_map, tabs_container]
+        for i in range(len(tabs)):
+            res.append(gr.update(visible=False, label=f"Slot {i+1}")) # Tab visible=False
+            res.append([]) # Chatbot value=[]
+            res.append("Ready") # Status value="Ready"
+            
+        return tuple(res)
 
     def stop_chat(self, _agent_selector=None):
         """Signal all agents to stop execution."""
@@ -559,14 +609,19 @@ class WebUI:
             _agent_pool.stopped = True
         return None
 
-    def retry_chat(self, _chatbot, _history, _agent_selector=None, _sub_chatbot=None, _sub_status=None):
+    def retry_chat(self, _chatbot, _history, _agent_selector, _slot_map, *args):
         """Remove last response and re-run."""
         if not _history or len(_history) < 2:
-            yield _chatbot, _history, _agent_selector, _sub_chatbot, _sub_status
+            # Reconstruct the outputs for Gradio
+            tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
+            res = [_chatbot, _history, _agent_selector, _slot_map, tabs_container]
+            res.extend(tabs)
+            res.extend(sub_chatbots)
+            res.extend(sub_statuses)
+            yield tuple(res)
             return
 
         # Remove the last ASSISTANT message and any trailing metadata
-        # History is typically [{role: user, content: ...}, {role: assistant, content: ...}]
         if _history[-1][ROLE] == ASSISTANT:
             _history.pop()
         
@@ -574,14 +629,19 @@ class WebUI:
         if _chatbot and _chatbot[-1][1] is not None:
             _chatbot.pop()
 
-        # Re-run the generation
-        yield from self.agent_run(_chatbot, _history, _agent_selector, _sub_chatbot, _sub_status)
+        yield from self.agent_run(_chatbot, _history, _agent_selector, _slot_map, *args)
 
-    def agent_run(self, _chatbot, _history, _agent_selector=None, _sub_chatbot=None, _sub_status=None, _session_name="MainSession"):
+    def agent_run(self, _chatbot, _history, _agent_selector, _slot_map, *args):
+        from qwen_agent.gui.gradio_dep import gr
+        
+        # Parse slot components and potential session name
+        tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
+        _session_name = remaining[0] if remaining else "Maine"
+        
         if self.verbose:
             logger.info('agent_run input:\n' + pprint.pformat(_history, indent=2))
 
-        # Capture expected structure at the start to ensure stable yield lengths
+        # Capture expected structure at the start
         has_sub = len(self.agent_list) > 1 or self.agent_hub is not None
         has_selector = len(self.agent_list) > 1
         
@@ -593,238 +653,172 @@ class WebUI:
         if self.agent_hub:
             agent_runner = self.agent_hub
         
-        # Apply session name if it's an Orchestrator
         if hasattr(agent_runner, 'session_name'):
             agent_runner.session_name = _session_name
         
-        # Reset stop flag for new run
         _agent_pool = getattr(agent_runner, 'agent_pool', None)
         if _agent_pool:
             _agent_pool.stopped = False
-            if hasattr(_agent_pool, 'sub_agent_state'):
-                _agent_pool.sub_agent_state.clear()
-        
-        # Initialize sub-agent chat for new turn
-        if has_sub:
-            _sub_chatbot = []
-            _sub_chatbot.append([None, f"🚀 {agent_runner.name} is working..."])
-            if _sub_status:
-                _sub_status = "Agent thinking..."
-        
-        # Track previously processed response count
-        _prev_rsp_count = 0
-        agent_index = _agent_selector or 0
-        
-        responses = []
-        from qwen_agent.gui.gradio_dep import gr
+            self._last_active_sa = None
+            if hasattr(_agent_pool, 'active_stack'):
+                _agent_pool.active_stack.clear()
         
         main_label = f"Main Chat: {agent_runner.__class__.__name__}"
         if hasattr(agent_runner, 'session_name'):
             main_label += f" ({agent_runner.session_name})"
         elif hasattr(agent_runner, 'name'):
             main_label += f" ({agent_runner.name})"
-            
-        sub_label_base = "🔄 Sub-Agent Activity"
-        sub_label = sub_label_base
 
+        # Initial yield to clear and update
+        def get_all_outputs():
+            res = [
+                gr.update(value=copy.deepcopy(_chatbot), label=main_label), 
+                _history,
+                _agent_selector,
+                _slot_map,
+                tabs_container
+            ]
+            res.extend(tabs)
+            res.extend(sub_chatbots)
+            res.extend(sub_statuses)
+            return tuple(res)
+
+        yield get_all_outputs()
+        
+        _prev_rsp_count = 0
+        agent_index = _agent_selector or 0
+        responses = []
         import time
         last_yield_time = 0
         yield_interval = 0.1  # 10Hz throttle
-
+        
+        _last_stack_top = None
+        _last_responses_key = None
+        
         try:
             for responses in (agent_runner.run(_history, **self.run_kwargs) if hasattr(agent_runner, "run") else []):
-                if not responses:
-                    continue
-                if responses[-1][CONTENT] == PENDING_USER_INPUT:
-                    logger.info('Interrupted. Waiting for user input!')
-                    if has_sub:
-                        _sub_chatbot.append([None, "⏳ Waiting for your input..."])
-                    break
+                current_time = time.time()
+                is_agent_switch = False
+                main_changed = False
+                sub_changed = False
+                
+                if self.verbose: logger.info(f"[DEBUG] agent_run tick at {current_time}")
+                
+                active_slot_idx = None
+                if has_sub and _agent_pool and hasattr(_agent_pool, 'sub_agent_state'):
+                    active_stack = getattr(_agent_pool, 'active_stack', [])
+                    current_top = active_stack[-1] if active_stack else None
 
-                display_responses = convert_fncall_to_text(responses)
-                if not display_responses:
-                    continue
-                if display_responses[-1][CONTENT] is None:
-                    continue
-
-                # Update sub-agent panel from agent_pool streaming state
-                if has_sub:
-                    # Try to read live streaming state from OrchestratorAgent's agent_pool
-                    _agent_pool = getattr(agent_runner, 'agent_pool', None)
-                    if _agent_pool and hasattr(_agent_pool, 'sub_agent_state'):
-                        # Identify the sub-agent to display using the active_stack (recursive safe)
-                        display_name = None
-                        active_stack = getattr(_agent_pool, 'active_stack', [])
-                        
-                        if active_stack:
-                            # Use the top of the stack (deepest active agent)
-                            display_name = active_stack[-1]
-                            self._last_active_sa = display_name
-                        else:
-                            # If no one is active according to stack, check if anyone is still marked active in state
-                            # (Safety fallback)
-                            for sa_name, sa_state in _agent_pool.sub_agent_state.items():
-                                if sa_state.get('active'):
-                                    display_name = sa_name
-                                    self._last_active_sa = sa_name
+                    if current_top:
+                        # Find or allocate a slot for this sub-agent
+                        if current_top not in _slot_map:
+                            # Claim next available slot
+                            for i in range(len(tabs)):
+                                if i not in _slot_map.values():
+                                    _slot_map[current_top] = i
+                                    # Make tab visible and focused
+                                    tabs[i] = gr.update(visible=True, label=f"🔄 {current_top}")
+                                    tabs_container = gr.update(selected=f"sub_tab_{i}")
+                                    # Clear its chatbot for new session
+                                    sub_chatbots[i] = []
                                     break
                         
-                        # Fallback to last active if none are currently running
-                        if not display_name:
-                            display_name = self._last_active_sa
+                        active_slot_idx = _slot_map.get(current_top)
+                        if active_slot_idx is not None:
+                            # Switch focus if it's a new top agent
+                            if current_top != _last_stack_top:
+                                is_agent_switch = True
+                                _last_stack_top = current_top
+                                tabs_container = gr.update(selected=f"sub_tab_{active_slot_idx}")
 
-                        if display_name and display_name in _agent_pool.sub_agent_state:
-                            sa_state = _agent_pool.sub_agent_state[display_name]
-                            sub_label = f"Sub-Agent: {sa_state.get('agent_name', display_name)}"
-                            messages = sa_state.get('messages', [])
+                            # Update the slot's content
+                            sa_state = _agent_pool.sub_agent_state[current_top]
+                            if self.verbose: logger.info(f"[DEBUG] Sub-agent {current_top} state: active={sa_state.get('active')}, msg_count={len(sa_state.get('messages', []))}")
+                            sub_statuses[active_slot_idx] = f"{current_top} is responding..." if sa_state.get('active') else "Finished"
                             
-                            new_sub_chatbot = []
+                            messages = copy.deepcopy(sa_state.get('messages', []))
+                            new_val = []
                             if messages:
-                                formatted_msgs = convert_fncall_to_text(messages)
-                                new_sub_chatbot.append([f"🤝 Full context for **{display_name}**", None])
-                                
-                                current_pair = [None, None]
-                                for msg in formatted_msgs:
-                                    role = msg.get('role')
-                                    content = msg.get('content')
+                                formatted = convert_fncall_to_text(messages)
+                                pair = [None, None]
+                                for msg in formatted:
+                                    role, content = msg.get('role'), msg.get('content')
                                     if role == USER:
-                                        if current_pair[0] is not None:
-                                            new_sub_chatbot.append(current_pair)
-                                            current_pair = [None, None]
-                                        current_pair[0] = content
+                                        if pair[0] is not None: new_val.append(list(pair))
+                                        pair = [content, None]
                                     elif role == ASSISTANT:
-                                        current_pair[1] = content
-                                        new_sub_chatbot.append(current_pair)
-                                        current_pair = [None, None]
-                                
-                                if current_pair[0] is not None or current_pair[1] is not None:
-                                    new_sub_chatbot.append(current_pair)
+                                        pair[1] = content
+                                        new_val.append(list(pair))
+                                        pair = [None, None]
+                                if pair[0] or pair[1]: new_val.append(list(pair))
                             
-                            if sa_state.get('active') and _sub_status:
-                                _sub_status = f"{display_name} is responding..."
+                            # Sanitize
+                            for bubble in new_val:
+                                if bubble[0]: bubble[0] = self._sanitize_content(bubble[0])
+                                if bubble[1]: bubble[1] = self._sanitize_content(bubble[1])
                             
-                            _sub_chatbot = new_sub_chatbot
-                        else:
-                            sub_label = sub_label_base
+                            if sub_chatbots[active_slot_idx] != new_val:
+                                if self.verbose: logger.info(f"[DEBUG] Sub-agent {current_top} content changed. new_val len: {len(new_val)}")
+                                sub_chatbots[active_slot_idx] = new_val
+                                sub_changed = True
                     else:
-                        # Fallback for non-OrchestratorAgent
-                        new_responses = responses[_prev_rsp_count:]
-                        for rsp in new_responses:
-                            role = rsp.get('role', '')
-                            fn_call = rsp.get('function_call')
-                            if role == 'assistant' and fn_call:
-                                tool_name = fn_call.get('name', 'tool') if isinstance(fn_call, dict) else getattr(fn_call, 'name', 'tool')
-                                _sub_chatbot.append([f"🔧 {tool_name}", "Calling..."])
-                            elif role == 'function':
-                                tool_name = rsp.get('name', 'tool')
-                                result_preview = str(rsp.get('content', ''))[:200]
-                                for i in range(len(_sub_chatbot) - 1, -1, -1):
-                                    if _sub_chatbot[i][0] and f"🔧 {tool_name}" in _sub_chatbot[i][0]:
-                                        _sub_chatbot[i] = [f"✅ {tool_name}", result_preview or "Done"]
-                                        break
+                        _last_stack_top = None
 
-                    _prev_rsp_count = len(responses)
+                # Process main chat
+                if responses:
+                    current_responses_key = (len(responses), responses[-1].get(CONTENT) if isinstance(responses[-1], dict) else getattr(responses[-1], CONTENT, None))
+                    if current_responses_key != _last_responses_key:
+                        _last_responses_key = current_responses_key
+                        if responses[-1].get(CONTENT) == PENDING_USER_INPUT:
+                            break
+                        
+                        display_responses = convert_fncall_to_text(responses)
+                        if display_responses and display_responses[-1][CONTENT] is not None:
+                            _prev_rsp_count = len(responses)
+                            while len(display_responses) > num_output_bubbles:
+                                _chatbot.append([None, [None for _ in range(len(self.agent_list))]])
+                                num_output_bubbles += 1
+                            for i, rsp in enumerate(display_responses):
+                                agent_index = self._get_agent_index_by_name(rsp[NAME])
+                                sanitized = self._sanitize_content(rsp[CONTENT])
+                                _chatbot[num_input_bubbles + i][1][agent_index] = sanitized
+                            if has_selector: _agent_selector = agent_index
+                            main_changed = True
 
-                while len(display_responses) > num_output_bubbles:
-                    _chatbot.append([None, None])
-                    _chatbot[-1][1] = [None for _ in range(len(self.agent_list))]
-                    num_output_bubbles += 1
-
-                assert num_output_bubbles == len(display_responses)
-                assert num_input_bubbles + num_output_bubbles == len(_chatbot)
-
-                for i, rsp in enumerate(display_responses):
-                    agent_index = self._get_agent_index_by_name(rsp[NAME])
-                    sanitized_content = self._sanitize_content(rsp[CONTENT])
-                    _chatbot[num_input_bubbles + i][1][agent_index] = sanitized_content
-
-                if has_selector:
-                    _agent_selector = agent_index
-
-                # Sanitize sub-chatbot content
-                if has_sub:
-                    for bubble in _sub_chatbot:
-                        if bubble[0]:
-                            bubble[0] = self._sanitize_content(bubble[0])
-                        if bubble[1]:
-                            bubble[1] = self._sanitize_content(bubble[1])
-
-                # Throttled Yield based on initial parameters
-                current_time = time.time()
-                if current_time - last_yield_time > yield_interval:
-                    last_yield_time = current_time
-                    if has_sub:
-                        if has_selector:
-                            yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, _agent_selector, gr.update(value=copy.deepcopy(_sub_chatbot), label=sub_label), _sub_status
-                        else:
-                            yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, gr.update(value=copy.deepcopy(_sub_chatbot), label=sub_label), _sub_status
+                if main_changed or sub_changed or is_agent_switch:
+                    # Apply throttling only to the yield itself
+                    if is_agent_switch or (current_time - last_yield_time > yield_interval):
+                        last_yield_time = current_time
+                        if self.verbose: logger.info(f"[DEBUG] yielding update: main={main_changed}, sub={sub_changed}, switch={is_agent_switch}")
+                        yield get_all_outputs()
                     else:
-                        if has_selector:
-                            yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, _agent_selector
-                        else:
-                            yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history
+                        if self.verbose: logger.info(f"[DEBUG] skipping yield due to throttle")
+
+            # Final cleanup/compression sync
+            if responses:
+                _history.extend([res for res in responses if res[CONTENT] != PENDING_USER_INPUT])
+
+            if hasattr(agent_runner, 'turn_final_messages') and agent_runner.turn_final_messages:
+                if len(agent_runner.turn_final_messages) < len(_history):
+                    _history.clear()
+                    for res in agent_runner.turn_final_messages:
+                        msg = res.model_dump() if not isinstance(res, dict) else res
+                        if msg.get(ROLE) != SYSTEM: _history.append(msg)
+                agent_runner.turn_final_messages = None
+
+            # Reset statuses to Ready
+            for i in range(len(sub_statuses)):
+                if sub_statuses[i] != "Ready":
+                    sub_statuses[i] = "Ready"
+            yield get_all_outputs()
+
         except Exception as e:
             import traceback
             traceback.print_exc()
-            error_msg = f"⚠️ **Model or Service Error:**\n```\n{str(e)}\n```\n\n*Please check your LLM configuration or ensure the model is loaded.*"
-            if _chatbot and not getattr(_chatbot[-1][1][-1] if isinstance(_chatbot[-1][1], list) else (_chatbot[-1][1] or ''), 'strip', lambda: '')():
-                # Replace empty bubble
-                if isinstance(_chatbot[-1][1], list):
-                    _chatbot[-1][1][-1] = error_msg
-                else:
-                    _chatbot[-1][1] = error_msg
-            else:
-                _chatbot.append((None, error_msg))
-            
-            if has_sub:
-                if has_selector:
-                    yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector, gr.update(value=_sub_chatbot, label="⚠️ Error"), "Failed"
-                else:
-                    yield gr.update(value=_chatbot, label=main_label), _history, gr.update(value=_sub_chatbot, label="⚠️ Error"), "Failed"
-            else:
-                if has_selector:
-                    yield gr.update(value=_chatbot, label=main_label), _history, _agent_selector
-                else:
-                    yield gr.update(value=_chatbot, label=main_label), _history
+            error_msg = f"⚠️ **Error:**\n```\n{str(e)}\n```"
+            _chatbot.append((None, error_msg))
+            yield get_all_outputs()
 
-        if responses:
-            _history.extend([res for res in responses if res[CONTENT] != PENDING_USER_INPUT])
-
-        # Check if the Orchestrator's internal messages array was compressed mid-turn
-        if hasattr(agent_runner, 'turn_final_messages') and agent_runner.turn_final_messages:
-            if len(agent_runner.turn_final_messages) < len(_history):
-                logger.info("Orchestrator history was compressed. Syncing WebUI history.")
-                _history.clear()
-                for res in agent_runner.turn_final_messages:
-                    msg = res.model_dump() if not isinstance(res, dict) else res
-                    # Strip system messages — agent.py:run() dynamically prepends
-                    # the system message on every turn, and the compression summary
-                    # is already merged into the AgentPool history's system message.
-                    if msg.get(ROLE) == SYSTEM:
-                        continue
-                    _history.append(msg)
-            # Clear so it doesn't carry over
-            agent_runner.turn_final_messages = None
-        # Final update to sub-agent chat
-        if has_sub:
-            _sub_chatbot.append([None, f"✅ {agent_runner.name} completed!"])
-            if _sub_status:
-                _sub_status = "Ready"
-
-        # Stable Final Yield
-        if has_sub:
-            if has_selector:
-                yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, _agent_selector, gr.update(value=copy.deepcopy(_sub_chatbot), label=sub_label_base), _sub_status
-            else:
-                yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, gr.update(value=copy.deepcopy(_sub_chatbot), label=sub_label_base), _sub_status
-        else:
-            if has_selector:
-                yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history, _agent_selector
-            else:
-                yield gr.update(value=copy.deepcopy(_chatbot), label=main_label), _history
-
-        if self.verbose:
-            logger.info('agent_run response:\n' + pprint.pformat(responses, indent=2))
 
     def flushed(self):
         from qwen_agent.gui.gradio_dep import gr

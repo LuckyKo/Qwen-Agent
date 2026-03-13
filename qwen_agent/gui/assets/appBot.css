@@ -115,7 +115,12 @@
 }
 
 .markdown-body details {
-  white-space: nowrap;
+  white-space: pre-wrap;
+}
+.markdown-body details pre,
+.markdown-body details code {
+  white-space: pre-wrap !important;
+  word-break: break-all !important;
 }
 .markdown-body .bot details:not(:last-child) {
   margin-bottom: 1px;
