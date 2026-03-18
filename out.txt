@@ -1,63 +1,14 @@
-[DEBUG] Sub-agent CodeQualityReviewer yielding token...
-2026-03-11 09:17:42,751 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
-2026-03-11 09:17:42,751 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7516043
-[DEBUG] Sub-agent CodeQualityReviewer yielding token...
-2026-03-11 09:17:42,751 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
-2026-03-11 09:17:42,752 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7526033
-[DEBUG] Sub-agent CodeQualityReviewer yielding token...
-2026-03-11 09:17:42,752 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
-2026-03-11 09:17:42,752 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7526033
-[DEBUG] Sub-agent CodeQualityReviewer yielding token...
-2026-03-11 09:17:42,753 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
-2026-03-11 09:17:42,753 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.753621
-[DEBUG] Sub-agent CodeQualityReviewer yielding token...
-2026-03-11 09:17:42,754 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
-2026-03-11 09:17:42,754 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7544045
-[DEBUG] Sub-agent CodeQualityReviewer yielding token...
-2026-03-11 09:17:42,754 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
-2026-03-11 09:17:42,754 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.7549236
-[DEBUG] Sub-agent CodeQualityReviewer yielding token...
-2026-03-11 09:17:42,755 - agent_orchestrator.py - 891 - INFO - [DEBUG] Sub-agent CodeQualityReviewer update: 45 msgs
-2026-03-11 09:17:42,755 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.75592
-2026-03-11 09:17:42,756 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213462.756921
-2026-03-11 09:17:42,756 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
-2026-03-11 09:17:42,771 - agent_orchestrator.py - 582 - INFO - LLM Call Order: ['system', 'user', 'assistant', 'assistant', 'function', 'assistant', 'assistant', 'function']
-2026-03-11 09:17:42,774 - base.py - 785 - INFO - ALL tokens: 799, Available tokens: 31220
-2026-03-11 09:17:44,402 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4023054
-2026-03-11 09:17:44,402 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
-2026-03-11 09:17:44,412 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4129322
-2026-03-11 09:17:44,412 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:44,431 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4311128
-2026-03-11 09:17:44,432 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:44,462 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4622395
-2026-03-11 09:17:44,463 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:44,493 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4925184
-2026-03-11 09:17:44,493 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:44,495 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.4955146
-2026-03-11 09:17:44,496 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:44,524 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.524029
-2026-03-11 09:17:44,524 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
-2026-03-11 09:17:44,571 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.5712793
-2026-03-11 09:17:44,571 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:44,632 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.6320524
-2026-03-11 09:17:44,632 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
-2026-03-11 09:17:44,664 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213464.6641257
-2026-03-11 09:17:55,917 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:55,919 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213475.9196146
-2026-03-11 09:17:55,919 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:55,977 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213475.9778616
-2026-03-11 09:17:55,978 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
-2026-03-11 09:17:55,987 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213475.9873736
-2026-03-11 09:17:55,987 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:56,103 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.103574
-2026-03-11 09:17:56,103 - web_ui.py - 792 - INFO - [DEBUG] yielding update: main=True, sub=False, switch=False
-2026-03-11 09:17:56,116 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.1160386
-2026-03-11 09:17:56,117 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:56,118 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.1186442
-2026-03-11 09:17:56,118 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:56,119 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.119644
-2026-03-11 09:17:56,119 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:56,120 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.120644
-2026-03-11 09:17:56,120 - web_ui.py - 795 - INFO - [DEBUG] skipping yield due to throttle
-2026-03-11 09:17:56,120 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.120644
-2026-03-11 09:17:56,121 - web_ui.py - 705 - INFO - [DEBUG] agent_run tick at 1773213476.121644
+2026-03-18 06:15:02,814 - agent_orchestrator.py - 220 - INFO - AgentPool reset — all instances and loggers cleared.
+Traceback (most recent call last):
+  File "C:\Python312\Lib\site-packages\gradio\routes.py", line 1099, in predict
+    output = await route_utils.call_process_api(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\route_utils.py", line 322, in call_process_api
+    output = await app.get_blocks().process_api(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\blocks.py", line 2147, in process_api
+    data = await self.postprocess_data(block_fn, result["prediction"], state)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\gradio\blocks.py", line 1934, in postprocess_data
+    raise InvalidComponentError(
+gradio.exceptions.InvalidComponentError: <class 'gradio.layouts.tabs.Tab'> Component not a valid output component.

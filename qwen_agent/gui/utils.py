@@ -38,36 +38,23 @@ THINK_CLOSED = '''
 
 TOOL_CALL_OPEN = '''
 <details open>
-  <summary>Start calling tool "{tool_name}" ...</summary>
-
-```json
-{tool_input}
-```
-
+  <summary>🛠️ Calling tool: <b>{tool_name}</b></summary>
+<div class="tool-call-body">{tool_input}</div>
 </details>
 '''
 
 TOOL_CALL_CLOSED = '''
 <details>
-  <summary>Start calling tool "{tool_name}" ...</summary>
-
-```json
-{tool_input}
-```
-
+  <summary>🛠️ Calling tool: <b>{tool_name}</b></summary>
+<div class="tool-call-body">{tool_input}</div>
 </details>
 '''
 
 TOOL_OUTPUT = '''
 <details>
-  <summary>Finished tool calling.</summary>
-
-```text
-{tool_output}
-```
-
+  <summary>✅ Tool Execution Results</summary>
+<div class="tool-output-body">{tool_output}</div>
 </details>
-
 '''
 
 
@@ -99,7 +86,7 @@ def convert_fncall_to_text(messages: List[Dict]) -> List[Dict]:
     new_messages = []
     last_was_function = False
 
-    for msg in messages:
+    for i, msg in enumerate(messages):
         role, content, reasoning_content, name = msg[ROLE], msg[CONTENT], msg.get(REASONING_CONTENT,
                                                                                   ''), msg.get(NAME, None)
 
@@ -138,9 +125,8 @@ def convert_fncall_to_text(messages: List[Dict]) -> List[Dict]:
         elif role == ASSISTANT:
             if reasoning_content:
                 thought = reasoning_content
-                # If there's reasoning content and we are at the end (could be streaming), keep it open?
-                # Usually reasoning_content is from DeepSeek, which is static up until the end, but let's be safe.
-                is_active = (msg == messages[-1])
+                # Keep open if it's the last message OR if the content is still essentially empty (streaming)
+                is_active = (msg == messages[-1]) or not content.strip()
                 t_tmpl = THINK_OPEN if is_active else THINK_CLOSED
                 content = t_tmpl.format(thought=thought) + content
 
@@ -173,9 +159,10 @@ def convert_fncall_to_text(messages: List[Dict]) -> List[Dict]:
                 except:
                     f_args = f_args_raw
                 
-                # IMPORTANT: If this is the active message and no function result has arrived yet, keep the tab OPEN.
-                # Also, fn_call implies tool is running iff it's the last message
-                is_active_tool = (msg == messages[-1])
+                # Keep open if it's the last message OR if the next message isn't a FUNCTION result yet
+                next_msg = messages[i + 1] if i + 1 < len(messages) else None
+                is_active_tool = (next_msg is None or next_msg.get(ROLE) != FUNCTION)
+                
                 tc_tmpl = TOOL_CALL_OPEN if is_active_tool else TOOL_CALL_CLOSED
                 content += "\n" + tc_tmpl.format(tool_name=f_name, tool_input=f_args)
             

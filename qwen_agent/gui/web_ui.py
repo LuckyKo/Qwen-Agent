@@ -129,6 +129,7 @@ class WebUI:
         ) as demo:
             history = gr.State([])
             sub_agent_history = gr.State([])  # Track sub-agent conversations
+            slot_last_active = gr.State({})  # Track last activity time for LRU eviction
             
             with ms.Application():
                 with gr.Row(elem_classes='container'):
@@ -184,7 +185,7 @@ class WebUI:
                         )
                     
                     # Sub-agent conversation panel
-                    NUM_SUB_SLOTS = 5
+                    NUM_SUB_SLOTS = 12
                     sub_tabs = []
                     sub_chatbots = []
                     sub_statuses = []
@@ -220,15 +221,6 @@ class WebUI:
                             elem_id="session_name_input"
                         )
 
-                        agent_info_block = self._create_agent_info_block()
-
-                        if self.prompt_suggestions:
-                            gr.Examples(
-                                label='Suggestions',
-                                examples=self.prompt_suggestions,
-                                inputs=[input],
-                            )
-                        
                         # --- User Approval Panel (polls for blocking approvals) ---
                         with gr.Accordion("🛡️ Pending Approvals", open=True, visible=False, elem_id="approval_panel") as approval_accordion:
                             approval_id_list = gr.Dropdown(
@@ -249,8 +241,18 @@ class WebUI:
                             # Control settings for approvals
                             timeout_toggle = gr.Checkbox(label="Enable 5-minute AFK auto-reject timeout (if unchecked, it will wait forever)", value=True)
                             
-                            # Timer to poll for pending approvals every 1 second
+                            #timer to poll for pending approvals every 1 second
                             approval_timer = gr.Timer(value=1, active=True)
+                        
+                        # --- Load Session Panel ---
+                        with gr.Accordion("📂 Load Session", open=False):
+                            log_load_file = gr.File(
+                                label="Upload Log File (.jsonl)",
+                                file_types=[".jsonl"],
+                                file_count="single"
+                            )
+                            load_session_btn = gr.Button("🚀 Load Session", variant="secondary")
+                            load_status = gr.Markdown("")
                         
                         agent_plugins_block = self._create_agent_plugins_block()
 
@@ -271,18 +273,18 @@ class WebUI:
                                 queue=False,
                             )
 
-                    if len(self.agent_list) > 1:
-                        agent_selector.change(
-                            fn=self.change_agent,
-                            inputs=[agent_selector, slot_map] + sub_chatbots + sub_statuses,
-                            outputs=[agent_selector, agent_info_block, agent_plugins_block, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
-                            queue=False,
-                        )
+                        if len(self.agent_list) > 1:
+                            agent_selector.change(
+                                fn=self.change_agent,
+                                inputs=[agent_selector, slot_map] + sub_chatbots + sub_statuses,
+                                outputs=[agent_selector, agent_plugins_block, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
+                                queue=False,
+                            )
 
                     input_promise = input.submit(
                         fn=self.add_text,
-                        inputs=[input, audio_input, chatbot, history, slot_map] + sub_chatbots + sub_statuses,
-                        outputs=[input, audio_input, chatbot, history, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
+                        inputs=[input, audio_input, chatbot, history, slot_map, slot_last_active] + sub_chatbots + sub_statuses,
+                        outputs=[input, audio_input, chatbot, history, slot_map, slot_last_active, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                         queue=True,
                     )
 
@@ -294,23 +296,23 @@ class WebUI:
                             queue=True,
                         ).then(
                             self.agent_run,
-                            [chatbot, history, agent_selector, slot_map] + sub_chatbots + sub_statuses,
-                            [chatbot, history, agent_selector, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
+                            [chatbot, history, agent_selector, slot_map, slot_last_active] + sub_chatbots + sub_statuses + [session_name],
+                            [chatbot, history, agent_selector, slot_map, slot_last_active, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                             queue=True,
                         )
                     elif len(self.agent_list) > 1:
                         # Multiple agents but mention disabled - still pass agent_selector
                         input_promise = input_promise.then(
                             self.agent_run,
-                            [chatbot, history, agent_selector, slot_map] + sub_chatbots + sub_statuses + [session_name],
-                            [chatbot, history, agent_selector, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
+                            [chatbot, history, agent_selector, slot_map, slot_last_active] + sub_chatbots + sub_statuses + [session_name],
+                            [chatbot, history, agent_selector, slot_map, slot_last_active, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                             queue=True,
                         )
                     else:
                         input_promise = input_promise.then(
                             self.agent_run,
-                            [chatbot, history, session_name],
-                            [chatbot, history],
+                            [chatbot, history, agent_selector, slot_map, slot_last_active, session_name] + sub_chatbots + sub_statuses,
+                            [chatbot, history, agent_selector, slot_map, slot_last_active, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                             queue=True,
                         )
 
@@ -358,15 +360,24 @@ class WebUI:
                     
                     retry_promise = retry_btn.click(
                         fn=self.retry_chat,
-                        inputs=[chatbot, history, agent_selector, slot_map] + sub_chatbots + sub_statuses,
-                        outputs=[chatbot, history, agent_selector, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
+                        inputs=[chatbot, history, agent_selector, slot_map, slot_last_active] + sub_chatbots + sub_statuses,
+                        outputs=[chatbot, history, agent_selector, slot_map, slot_last_active, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                     )
                     
                     reset_btn.click(
                         fn=self.reset_chat,
-                        inputs=[agent_selector, slot_map] + sub_chatbots + sub_statuses,
-                        outputs=[chatbot, history, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
+                        inputs=[agent_selector, slot_map, slot_last_active] + sub_chatbots + sub_statuses,
+                        outputs=[chatbot, history, agent_selector, slot_map, slot_last_active, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                         queue=False,
+                    )
+
+                    load_session_btn.click(
+                        fn=self.handle_load_session,
+                        inputs=[log_load_file, session_name, agent_selector, slot_map, slot_last_active] + sub_chatbots + sub_statuses,
+                        outputs=[load_status, chatbot, history, session_name, agent_selector, slot_map, slot_last_active, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
+                    ).then(
+                        fn=lambda: None,
+                        outputs=[log_load_file]
                     )
 
             demo.load(None)
@@ -377,7 +388,7 @@ class WebUI:
 
     def _parse_slots(self, args):
         from qwen_agent.gui.gradio_dep import gr
-        num_slots = 5
+        num_slots = 12
         # Since Tabs cannot be inputs, they are no longer in args.
         # We return gr.update() for them so they can be in outputs.
         tabs = [gr.update() for _ in range(num_slots)]
@@ -452,10 +463,9 @@ class WebUI:
         
         tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
 
-        # [agent_selector, agent_info_block, agent_plugins_block, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses
+        # [agent_selector, agent_plugins_block, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses
         res = [
             agent_selector,
-            self._create_agent_info_block(agent_selector),
             self._get_agent_tools_update(agent_selector),
             _slot_map,
             tabs_container
@@ -514,7 +524,14 @@ class WebUI:
             
         yield self._get_agent_tools_update(agent_selector)
 
-    def add_text(self, _input, _audio_input, _chatbot, _history, _slot_map, *args):
+        # [input, audio_input, chatbot, history, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses
+        res = [gr.update(interactive=False, value=None), None, _chatbot, _history, _slot_map, tabs_container]
+        res.extend(tabs)
+        res.extend(sub_chatbots)
+        res.extend(sub_statuses)
+        yield tuple(res)
+
+    def add_text(self, _input, _audio_input, _chatbot, _history, _slot_map, _slot_last_active, *args):
         _history.append({
             ROLE: USER,
             CONTENT: [{
@@ -548,7 +565,7 @@ class WebUI:
         tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
 
         # [input, audio_input, chatbot, history, slot_map, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses
-        res = [gr.update(interactive=False, value=None), None, _chatbot, _history, _slot_map, tabs_container]
+        res = [gr.update(interactive=False, value=None), None, _chatbot, _history, _slot_map, _slot_last_active, tabs_container]
         res.extend(tabs)
         res.extend(sub_chatbots)
         res.extend(sub_statuses)
@@ -570,14 +587,15 @@ class WebUI:
 
         yield _chatbot, _agent_selector
 
-    def reset_chat(self, _agent_selector, _slot_map, *args):
+    def reset_chat(self, _agent_selector, _slot_map, _slot_last_active, *args):
         """Reset the conversation state."""
         from qwen_agent.gui.gradio_dep import gr
         # Clear main history and chatbot
         _history = []
         _chatbot = []
         _slot_map = {} # Clear slot mapping
-
+        _slot_last_active = {} # Clear LRU tracking
+        
         # If we have an OrchestratorAgent, clearing the internal history is important
         if _agent_selector is not None:
             agent = self.agent_list[_agent_selector]
@@ -589,11 +607,12 @@ class WebUI:
         tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
         
         # Reset all slots to invisible and empty
-        res = [_chatbot, _history, _slot_map, tabs_container]
-        for i in range(len(tabs)):
-            res.append(gr.update(visible=False, label=f"Slot {i+1}")) # Tab visible=False
-            res.append([]) # Chatbot value=[]
-            res.append("Ready") # Status value="Ready"
+        res = [_chatbot, _history, _agent_selector, _slot_map, _slot_last_active, tabs_container]
+        
+        # Correctly align with outputs structure: [tabs...] then [chatbots...] then [statuses...]
+        res.extend([gr.update(visible=False, label=f"Slot {i+1}") for i in range(len(tabs))])
+        res.extend([[] for _ in range(len(sub_chatbots))])
+        res.extend(["Ready" for _ in range(len(sub_statuses))])
             
         return tuple(res)
 
@@ -609,12 +628,12 @@ class WebUI:
             _agent_pool.stopped = True
         return None
 
-    def retry_chat(self, _chatbot, _history, _agent_selector, _slot_map, *args):
+    def retry_chat(self, _chatbot, _history, _agent_selector, _slot_map, _slot_last_active, *args):
         """Remove last response and re-run."""
         if not _history or len(_history) < 2:
             # Reconstruct the outputs for Gradio
             tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
-            res = [_chatbot, _history, _agent_selector, _slot_map, tabs_container]
+            res = [_chatbot, _history, _agent_selector, _slot_map, _slot_last_active, tabs_container]
             res.extend(tabs)
             res.extend(sub_chatbots)
             res.extend(sub_statuses)
@@ -629,9 +648,9 @@ class WebUI:
         if _chatbot and _chatbot[-1][1] is not None:
             _chatbot.pop()
 
-        yield from self.agent_run(_chatbot, _history, _agent_selector, _slot_map, *args)
+        yield from self.agent_run(_chatbot, _history, _agent_selector, _slot_map, _slot_last_active, *args)
 
-    def agent_run(self, _chatbot, _history, _agent_selector, _slot_map, *args):
+    def agent_run(self, _chatbot, _history, _agent_selector, _slot_map, _slot_last_active, *args):
         from qwen_agent.gui.gradio_dep import gr
         
         # Parse slot components and potential session name
@@ -676,6 +695,7 @@ class WebUI:
                 _history,
                 _agent_selector,
                 _slot_map,
+                _slot_last_active,
                 tabs_container
             ]
             res.extend(tabs)
@@ -704,6 +724,19 @@ class WebUI:
                 
                 if self.verbose: logger.info(f"[DEBUG] agent_run tick at {current_time}")
                 
+                # 0. Cleanup check: Remove any instances from slot_map that no longer exist in the pool
+                # (e.g. dismissed agents)
+                if has_sub and _agent_pool:
+                    dead_instances = [inst for inst in _slot_map if inst not in _agent_pool.instance_conversations]
+                    for inst in dead_instances:
+                        s_idx = _slot_map.pop(inst)
+                        tabs[s_idx] = gr.update(visible=False, label=f"Slot {s_idx+1}")
+                        sub_chatbots[s_idx] = []
+                        sub_statuses[s_idx] = "Ready"
+                        _slot_last_active.pop(s_idx, None)
+                        sub_changed = True
+                        if self.verbose: logger.info(f"[DEBUG] Slot {s_idx} freed as instance {inst} was dismissed.")
+                
                 active_slot_idx = None
                 if has_sub and _agent_pool and hasattr(_agent_pool, 'sub_agent_state'):
                     active_stack = getattr(_agent_pool, 'active_stack', [])
@@ -712,19 +745,44 @@ class WebUI:
                     if current_top:
                         # Find or allocate a slot for this sub-agent
                         if current_top not in _slot_map:
-                            # Claim next available slot
+                            # 1. Look for a free slot
+                            free_slot = None
                             for i in range(len(tabs)):
                                 if i not in _slot_map.values():
-                                    _slot_map[current_top] = i
-                                    # Make tab visible and focused
-                                    tabs[i] = gr.update(visible=True, label=f"🔄 {current_top}")
-                                    tabs_container = gr.update(selected=f"sub_tab_{i}")
-                                    # Clear its chatbot for new session
-                                    sub_chatbots[i] = []
+                                    free_slot = i
                                     break
+                            
+                            # 2. If no free slot, use LRU eviction
+                            if free_slot is None:
+                                # Find slot with oldest last_active time
+                                oldest_slot = 0
+                                min_time = float('inf')
+                                for s_idx in range(len(tabs)):
+                                    l_a_time = _slot_last_active.get(s_idx, 0)
+                                    if l_a_time < min_time:
+                                        min_time = l_a_time
+                                        oldest_slot = s_idx
+                                
+                                # Unmap previous owner
+                                owners_to_remove = [k for k, v in _slot_map.items() if v == oldest_slot]
+                                for k in owners_to_remove:
+                                    del _slot_map[k]
+                                
+                                free_slot = oldest_slot
+                                if self.verbose: logger.info(f"[DEBUG] LRU Eviction: Reusing slot {free_slot} for {current_top}")
+
+                            _slot_map[current_top] = free_slot
+                            # Make tab visible, focused and update label
+                            tabs[free_slot] = gr.update(visible=True, label=f"🔄 {current_top}")
+                            tabs_container = gr.update(selected=f"sub_tab_{free_slot}")
+                            # Clear its chatbot for new session
+                            sub_chatbots[free_slot] = []
                         
                         active_slot_idx = _slot_map.get(current_top)
                         if active_slot_idx is not None:
+                            # Update LRU time
+                            _slot_last_active[active_slot_idx] = time.time()
+                            
                             # Switch focus if it's a new top agent
                             if current_top != _last_stack_top:
                                 is_agent_switch = True
@@ -766,10 +824,16 @@ class WebUI:
 
                 # Process main chat
                 if responses:
-                    current_responses_key = (len(responses), responses[-1].get(CONTENT) if isinstance(responses[-1], dict) else getattr(responses[-1], CONTENT, None))
+                    last_msg = responses[-1]
+                    last_content = last_msg.get(CONTENT) if isinstance(last_msg, dict) else getattr(last_msg, CONTENT, None)
+                    last_fn_call = last_msg.get('function_call') if isinstance(last_msg, dict) else getattr(last_msg, 'function_call', None)
+                    
+                    # Track changes in length, content, OR function call (for streaming tool calls)
+                    current_responses_key = (len(responses), last_content, str(last_fn_call))
+                    
                     if current_responses_key != _last_responses_key:
                         _last_responses_key = current_responses_key
-                        if responses[-1].get(CONTENT) == PENDING_USER_INPUT:
+                        if last_content == PENDING_USER_INPUT:
                             break
                         
                         display_responses = convert_fncall_to_text(responses)
@@ -819,6 +883,128 @@ class WebUI:
             _chatbot.append((None, error_msg))
             yield get_all_outputs()
 
+
+    def handle_load_session(self, log_file, current_session_name, agent_selector, _slot_map, _slot_last_active, *args):
+        """Handle the load session button click."""
+        from qwen_agent.gui.gradio_dep import gr
+        
+        agent_runner = self.agent_list[agent_selector or 0]
+        if self.agent_hub:
+            agent_runner = self.agent_hub
+            
+        _agent_pool = getattr(agent_runner, 'agent_pool', None)
+        if not _agent_pool:
+            # Reconstruct outputs for failure
+            tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
+            res = [
+                gr.update(value="Error: Current agent does not support session loading.", visible=True),
+                gr.update(), # Chatbot
+                gr.update(), # History
+                current_session_name,
+                agent_selector,
+                _slot_map,
+                _slot_last_active,
+                tabs_container
+            ]
+            res.extend(tabs)
+            res.extend(sub_chatbots)
+            res.extend(sub_statuses)
+            return tuple(res)
+
+        if not log_file:
+            # Reconstruct outputs for failure
+            tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
+            res = [
+                gr.update(value="Error: No file uploaded.", visible=True),
+                gr.update(), # Chatbot
+                gr.update(), # History
+                current_session_name,
+                agent_selector,
+                _slot_map,
+                _slot_last_active,
+                tabs_container
+            ]
+            res.extend(tabs)
+            res.extend(sub_chatbots)
+            res.extend(sub_statuses)
+            return tuple(res)
+
+        # Get the file path from the file object
+        # In Gradio, gr.File returns a NamedTemporaryFile-like object or a dict/list of them
+        log_path = log_file.name if hasattr(log_file, 'name') else str(log_file)
+
+        # Call backend to load session
+        status = _agent_pool.load_session_from_log(log_path, target_instance=current_session_name)
+        
+        # Prepare components for failure or success
+        tabs, tabs_container, sub_chatbots, sub_statuses, remaining = self._parse_slots(args)
+        
+        if status.startswith("Error"):
+            res = [
+                gr.update(value=status, visible=True),
+                gr.update(), # Chatbot
+                gr.update(), # History
+                current_session_name,
+                agent_selector,
+                _slot_map,
+                _slot_last_active,
+                tabs_container
+            ]
+            res.extend(tabs)
+            res.extend(sub_chatbots)
+            res.extend(sub_statuses)
+            return tuple(res)
+
+        # Determine which instance was actually loaded
+        import re
+        match = re.search(r"instance '([^']+)'", status)
+        loaded_instance = match.group(1) if match else current_session_name
+        
+        # Restore history and chatbot
+        full_history = _agent_pool.get_conversation(loaded_instance)
+        
+        # Convert to chatbot format (tuples of [user, assistant])
+        new_chatbot = []
+        
+        # Re-use logic for converting history to chatbot tuples
+        formatted = convert_fncall_to_text(full_history)
+        pair = [None, None]
+        for msg in formatted:
+            role, content = msg.get('role'), msg.get('content')
+            if role == USER:
+                if pair[0] is not None:
+                    new_chatbot.append(list(pair))
+                pair = [content, None]
+            elif role == ASSISTANT:
+                pair[1] = content
+                new_chatbot.append(list(pair))
+                pair = [None, None]
+        if pair[0] or pair[1]:
+            new_chatbot.append(list(pair))
+            
+        # Sanitize
+        for bubble in new_chatbot:
+            if bubble[0]: bubble[0] = self._sanitize_content(bubble[0])
+            if bubble[1]: bubble[1] = self._sanitize_content(bubble[1])
+
+        # Update main chat label
+        main_label = f"Main Chat: {agent_runner.__class__.__name__} ({loaded_instance})"
+        
+        res = [
+            gr.update(value=status, visible=True),
+            gr.update(value=new_chatbot, label=main_label),
+            full_history,
+            loaded_instance,
+            agent_selector, # Added to match outputs
+            _slot_map,
+            _slot_last_active,
+            tabs_container
+        ]
+        res.extend(tabs)
+        res.extend(sub_chatbots)
+        res.extend(sub_statuses)
+        
+        return tuple(res)
 
     def flushed(self):
         from qwen_agent.gui.gradio_dep import gr

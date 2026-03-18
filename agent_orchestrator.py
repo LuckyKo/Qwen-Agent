@@ -37,6 +37,8 @@ from qwen_agent.utils.utils import (
     extract_text_from_message,
     get_basename_from_url,
     merge_generate_cfgs,
+    has_chinese_messages,
+    json_loads,
 )
 from qwen_agent.tools.custom import (
     CallAgent,
@@ -85,13 +87,17 @@ class AgentPool:
         # List of instance_names currently in an active call (stack for recursion)
         self.active_stack: List[str] = []
         
+        # Caching for tool arguments to support __USE_PREV_ARG__
+        # self.last_tool_args[instance_name][tool_name] = {arg_name: actual_value}
+        self.last_tool_args: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        
         # Explicit stop flag for cancellation
         self.stopped = False
         
         # Auto-load all agents from the agents directory
         self._discover_agents()
     
-    def get_logger(self, instance_name: str, agent_class: str) -> 'AgentInstanceLogger':
+    def get_logger(self, instance_name: str, agent_class: str, base_metadata: Optional[Dict] = None) -> 'AgentInstanceLogger':
         """Get or create a logger for an agent instance."""
         if instance_name not in self.instance_loggers:
             # Ensure workspace/logs exists
@@ -101,7 +107,8 @@ class AgentPool:
             self.instance_loggers[instance_name] = AgentInstanceLogger(
                 agent_class=agent_class,
                 instance_name=instance_name,
-                log_dir=str(log_dir)
+                log_dir=str(log_dir),
+                base_metadata=base_metadata
             )
         return self.instance_loggers[instance_name]
     
@@ -209,7 +216,120 @@ rules:
         self.instance_loggers.clear()
         self.sub_agent_state.clear()
         self.active_stack.clear()
+        self.last_tool_args.clear()
         logger.info("AgentPool reset — all instances and loggers cleared.")
+    
+    def load_session_from_log(self, log_input: str, target_instance: Optional[str] = None) -> str:
+        """
+        Load session history from a log entry (JSON string) or a log file path.
+        Returns a status message.
+        """
+        log_input = log_input.strip()
+        if not log_input:
+            return "Error: Empty log input."
+
+        messages = []
+        metadata = {}
+        
+        # Try as file path first
+        potential_path = Path(log_input)
+        if potential_path.exists() and potential_path.is_file():
+            try:
+                with open(potential_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            item = json.loads(line)
+                            if "metadata" in item:
+                                metadata.update(item["metadata"])
+                            else:
+                                messages.append(item)
+                        except json.JSONDecodeError:
+                            continue
+                log_source = f"file '{potential_path.name}'"
+            except Exception as e:
+                return f"Error reading log file: {e}"
+        else:
+            # Try as JSON (single line or block)
+            try:
+                # Handle potential multiple JSON objects in one block (JSONL style)
+                lines = log_input.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                        if "metadata" in item:
+                            metadata.update(item["metadata"])
+                        elif isinstance(item, list): # Full history block
+                            messages.extend(item)
+                        else:
+                            messages.append(item)
+                    except json.JSONDecodeError:
+                        # Maybe it's a single large JSON block
+                        if len(lines) == 1:
+                            raise # Re-raise to try full-block parse
+                        continue
+                log_source = "JSON input"
+            except json.JSONDecodeError:
+                # Try parsing the whole thing as one JSON block
+                try:
+                    item = json.loads(log_input)
+                    if isinstance(item, list):
+                        messages = item
+                    elif isinstance(item, dict) and "history" in item:
+                        messages = item["history"]
+                        if "metadata" in item:
+                            metadata.update(item["metadata"])
+                    else:
+                        messages = [item]
+                    log_source = "JSON block"
+                except json.JSONDecodeError:
+                    return "Error: Input is neither a valid file path nor a valid JSON."
+
+        if not messages:
+            return "Error: No valid messages found in log input."
+
+        # Determine instance and class
+        instance_name = target_instance or metadata.get("instance_name") or "RecoveredSession"
+        agent_class = metadata.get("agent_class") or "Orchestrator"
+
+        # Filter out event markers and ensure role/content exist
+        cleaned_messages = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            if "event" in msg: # Skip COMPRESSION markers
+                continue
+            if ROLE in msg and CONTENT in msg:
+                # Convert back to Message objects if necessary, but dicts are fine for instance_conversations
+                cleaned_messages.append(msg)
+
+        if not cleaned_messages:
+            return "Error: No valid conversation messages found."
+
+        # Restore to pool
+        self.instance_conversations[instance_name] = cleaned_messages
+        self.instance_classes[instance_name] = agent_class
+        
+        # Proactively clear any existing logger for this instance so get_logger creates a fresh one
+        # with its own new timestamp and metadata line.
+        self.instance_loggers.pop(instance_name, None)
+        
+        # Initialize a new logger for the continued session
+        # We pass the metadata dictionary we found in the log file
+        self.instance_loggers[instance_name] = self.get_logger(
+            instance_name=instance_name,
+            agent_class=agent_class,
+            base_metadata=metadata
+        )
+        # Sync the loaded history to the NEW log file so it's persistent
+        self.instance_loggers[instance_name].update_history(cleaned_messages)
+
+        return f"Successfully loaded {len(cleaned_messages)} messages for instance '{instance_name}' ({agent_class}) from {log_source}."
     
     def _apply_context_compression(self, agent_name: str, summary: str, fraction: float, agent_obj: Optional[Assistant] = None):
         """
@@ -489,17 +609,12 @@ class OrchestratorAgent(Assistant):
                 m0_content = m0.get('content', '') if isinstance(m0, dict) else getattr(m0, 'content', '')
                 if isinstance(m0_content, str) and instance:
                     import re
-                    # Look for "You are [Type]." anywhere in the prompt
-                    # This handles both cases: 
-                    # 1. Start of prompt (standard Assistant)
-                    # 2. After [IDENTITY] block (sub-agent instance call)
+                    # 1. Update identity "You are [instance]."
                     pattern = rf"(?i)You are {self.agent_type}\."
-                    new_intro = f"You are {instance}."
-                    
                     if re.search(pattern, m0_content):
-                        m0_content = re.sub(pattern, new_intro, m0_content, count=1)
+                        m0_content = re.sub(pattern, f"You are {instance}.", m0_content, count=1)
                     
-                    # Insert Session Metadata section if not already present
+                    # 2. Insert Session Metadata section (Stable)
                     if '## Session Metadata' not in m0_content:
                         meta_lines = [
                             "## Session Metadata",
@@ -509,14 +624,40 @@ class OrchestratorAgent(Assistant):
                         ]
                         content_lines = m0_content.split('\n')
                         insert_pos = 2 if len(content_lines) > 1 and not content_lines[1].startswith("#") else 1
-                        for i, ml in enumerate(meta_lines):
-                            content_lines.insert(insert_pos + i, ml)
+                        for i, ml in enumerate(meta_lines): content_lines.insert(insert_pos + i, ml)
                         m0_content = '\n'.join(content_lines)
                     
-                    if isinstance(m0, dict):
-                        m0['content'] = m0_content
-                    else:
-                        m0.content = m0_content
+                    # 3. Inject available resources (Stable sort for caching)
+                    if '--- CURRENT AVAILABLE RESOURCES' not in m0_content:
+                        res_append = "\n\n--- CURRENT AVAILABLE RESOURCES (Auto-Injected) ---\n"
+                        res_append += "\nAvailable Sub-Agents (call via call_agent):\n"
+                        has_agents = False
+                        for name in sorted(self.agent_pool.list_agents()):
+                            if name.lower() != self.name.lower():
+                                info = self.agent_pool.get_agent_info(name)
+                                if info:
+                                    res_append += f"- **{info['name']}**: {info['tagline']}\n"
+                                    has_agents = True
+                        if not has_agents: res_append += "- None currently available.\n"
+                        
+                        res_append += "\nEnabled Tools (can change per interaction):\n"
+                        if self.function_map:
+                            for t_name in sorted(self.function_map.keys()):
+                                desc = getattr(self.function_map[t_name], 'description', 'No description provided')
+                                res_append += f"- **{t_name}**: {desc}\n"
+                        else: res_append += "- None currently enabled.\n"
+                        m0_content += res_append
+
+                    # 4. Inject Argument Reuse instructions (Static version for caching)
+                    if '### Advanced Feature: Argument Reuse' not in m0_content:
+                        m0_content += (
+                            "\n\n### Advanced Feature: Argument Reuse\n"
+                            "To reuse a LARGE argument value (like full file content or path) from any previous successful tool call in this session, "
+                            "use the exact placeholder: \"__USE_PREV_ARG__\". This saves tokens and processing time."
+                        )
+                    
+                    if isinstance(m0, dict): m0['content'] = m0_content
+                    else: m0.content = m0_content
 
             # Sync initial state if history is empty
             if not logger_inst.data["history"]:
@@ -527,39 +668,9 @@ class OrchestratorAgent(Assistant):
                 logger_inst.log_message(messages[-1])
 
         # --- Custom FnCallAgent-style loop with streaming sub-agent support ---
+        # messages[0] now contains all stabilized instructions, so caches will hit across turns.
         llm_messages = copy.deepcopy(messages)
-        
-        # --- Dynamically inject available sub-agents and tools ---
-        if llm_messages and llm_messages[0].role == SYSTEM:
-            # We want to modify the system message specifically for this run without
-            # altering the base system message permanently or the persistent log.
-            
-            system_append = "\n\n--- CURRENT AVAILABLE RESOURCES (Auto-Injected) ---\n"
-            
-            # 1. Inject available sub-agents
-            system_append += "\nAvailable Sub-Agents (call via call_agent):\n"
-            has_agents = False
-            for name in self.agent_pool.list_agents():
-                if name.lower() != self.name.lower(): # Don't list self
-                    info = self.agent_pool.get_agent_info(name)
-                    if info:
-                        system_append += f"- **{info['name']}**: {info['tagline']}\n"
-                        has_agents = True
-            if not has_agents:
-                system_append += "- None currently available.\n"
                 
-            # 2. Inject available tools
-            system_append += "\nEnabled Tools (can change per interaction):\n"
-            if self.function_map:
-                for t_name, t_obj in self.function_map.items():
-                    desc = getattr(t_obj, 'description', 'No description provided')
-                    system_append += f"- **{t_name}**: {desc}\n"
-            else:
-                system_append += "- None currently enabled.\n"
-                
-            # Modify the content of the first message (which is the SYSTEM message)
-            llm_messages[0].content += system_append
-            
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         response: List[Message] = []
 
@@ -621,18 +732,104 @@ class OrchestratorAgent(Assistant):
                     )
                 else:
                     # ── Normal synchronous tool ──
-                    call_kwargs = kwargs.copy()
-                    if 'agent_instance_name' not in call_kwargs:
-                        call_kwargs['agent_instance_name'] = self.session_name
                     
-                    # Pass the agent itself so tools (like compress_context) can sync 
-                    # back to its base system_message for persistence across turns.
-                    call_kwargs['agent_obj'] = self
+                    # --- Handle __USE_PREV_ARG__ Placeholder Replacement ---
+                    if isinstance(tool_args, str):
+                        tool_args = tool_args.strip()
+                        if tool_args:
+                            try:
+                                # Use relaxed json_loads to handle trailing commas or other LLM quirks
+                                tool_args = json_loads(tool_args)
+                            except Exception:
+                                pass # Let _call_tool handle standard verification
+                        else:
+                            tool_args = {} # Guard against empty string arguments
+                    
+                    if isinstance(tool_args, dict):
+                        # Use the current instance name as the scope for the last_tool_args cache
+                        instance_scope = self.session_name
                         
-                    tool_result = self._call_tool(
-                        tool_name, tool_args, messages=messages, 
-                        **call_kwargs
-                    )
+                        # Resolve placeholders
+                        placeholders_found = []
+                        for arg_key, arg_val in tool_args.items():
+                            if arg_val == "__USE_PREV_ARG__":
+                                placeholders_found.append(arg_key)
+                                
+                        if placeholders_found:
+                            # 1. Try tool-specific cache first
+                            prev_args = self.agent_pool.last_tool_args.get(instance_scope, {}).get(tool_name)
+                            
+                            # 2. Fallback to global cache for common parameters like 'path'
+                            global_args = self.agent_pool.last_tool_args.get(instance_scope, {}).get("__GLOBAL__", {})
+                            
+                            if not prev_args and not global_args:
+                                tool_result = f"Error: Cannot use __USE_PREV_ARG__ for '{tool_name}' because no previous call to this tool was recorded for instance '{instance_scope}'."
+                                # Skip tool execution if placeholder fails
+                                skip_execution = True
+                            else:
+                                skip_execution = False
+                                for arg_key in placeholders_found:
+                                    # Prefer tool-specific, then global
+                                    if prev_args and arg_key in prev_args:
+                                        tool_args[arg_key] = prev_args[arg_key]
+                                    elif arg_key in global_args:
+                                        tool_args[arg_key] = global_args[arg_key]
+                                    else:
+                                        tool_result = f"Error: Cannot use __USE_PREV_ARG__ for argument '{arg_key}' because it was not found in previous calls (neither specific to '{tool_name}' nor globally)."
+                                        skip_execution = True
+                                        break
+                        else:
+                            skip_execution = False
+                            
+                        if not skip_execution:
+                            call_kwargs = kwargs.copy()
+                            if 'agent_instance_name' not in call_kwargs:
+                                call_kwargs['agent_instance_name'] = self.session_name
+                            
+                            # Pass the agent itself so tools (like compress_context) can sync 
+                            # back to its base system_message for persistence across turns.
+                            call_kwargs['agent_obj'] = self
+                                
+                            try:
+                                tool_result = self._call_tool(
+                                    tool_name, tool_args, messages=messages, 
+                                    **call_kwargs
+                                )
+                            except Exception as e:
+                                logger.error(f"Error calling tool {tool_name}: {e}")
+                                tool_result = f"Error: {e}"
+                                if "valid JSON" in str(e) and isinstance(tool_args, str):
+                                    tool_result += f"\nYour arguments: {tool_args[:200]}..."
+                            
+                            # Caching: Save successful tool args for future reuse
+                            # Note: We save them even if the tool returned an error string, 
+                            # as long as the arguments themselves were theoretically valid.
+                            if instance_scope not in self.agent_pool.last_tool_args:
+                                self.agent_pool.last_tool_args[instance_scope] = {}
+                            
+                            # Local Tool Cache
+                            self.agent_pool.last_tool_args[instance_scope][tool_name] = copy.deepcopy(tool_args)
+                            
+                            # Global Cache Fallback (for cross-tool reuse)
+                            if "__GLOBAL__" not in self.agent_pool.last_tool_args[instance_scope]:
+                                self.agent_pool.last_tool_args[instance_scope]["__GLOBAL__"] = {}
+                            self.agent_pool.last_tool_args[instance_scope]["__GLOBAL__"].update(copy.deepcopy(tool_args))
+                    else:
+                        # Fallback for non-dict tool_args
+                        call_kwargs = kwargs.copy()
+                        if 'agent_instance_name' not in call_kwargs:
+                            call_kwargs['agent_instance_name'] = self.session_name
+                        call_kwargs['agent_obj'] = self
+                        try:
+                            tool_result = self._call_tool(
+                                tool_name, tool_args, messages=messages, 
+                                **call_kwargs
+                            )
+                        except Exception as e:
+                            logger.error(f"Error calling tool {tool_name}: {e}")
+                            tool_result = f"Error: {e}"
+                            if "valid JSON" in str(e) and isinstance(tool_args, str):
+                                tool_result += f"\nYour arguments: {tool_args[:200]}..."
                     
                     if tool_name == 'compress_context':
                         # Sync llm_messages with the newly compressed history in 'messages'.
@@ -1265,7 +1462,7 @@ def extract_sub_agent_feedback(messages: List[Dict], instance_name: str) -> str:
 class AgentInstanceLogger:
     """Handles persistent logging for an agent instance."""
     
-    def __init__(self, agent_class: str, instance_name: str, log_dir: str):
+    def __init__(self, agent_class: str, instance_name: str, log_dir: str, base_metadata: Optional[Dict] = None):
         self.agent_class = agent_class
         self.instance_name = instance_name
         self.start_time = datetime.datetime.now()
@@ -1279,9 +1476,22 @@ class AgentInstanceLogger:
                 "agent_class": agent_class,
                 "instance_name": instance_name,
                 "start_timestamp": self.start_time.isoformat(),
+                "current_log_path": self.log_path,
             },
             "history": []
         }
+        
+        # Merge base metadata if provided (e.g. from a loaded session)
+        if base_metadata:
+            for k, v in base_metadata.items():
+                if k not in self.data["metadata"]:
+                    self.data["metadata"][k] = v
+                elif k == "original_log_path":
+                     # Carry over origin if it exists, or set it if we're the first continuation
+                     self.data["metadata"][k] = v
+            # If we don't have an original_log_path yet and we are continuing, set it
+            if "original_log_path" not in self.data["metadata"] and "current_log_path" in base_metadata:
+                self.data["metadata"]["original_log_path"] = base_metadata["current_log_path"]
         self._initial_save()
 
     def _format_message(self, message: Union[Dict, Any]) -> Dict:

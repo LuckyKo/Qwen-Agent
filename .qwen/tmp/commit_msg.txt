@@ -1,0 +1,9 @@
+Refactor orchestrator state management and enhance sub-agent UI
+
+- agent_orchestrator.py: Replace stopped flag with active_stack, add class mismatch detection, improve streaming yields
+- web_ui.py: Implement multi-slot tab system for concurrent sub-agent visualization
+- gui/utils.py: Add open/closed template variants for active streaming states
+- file_ops.py: Add hard character limit to prevent context overflow
+- manager_ops.py: Add isolation safeguard for instance reassignment
+- soul_loader.py: Refactor system prompt builder with cleaner section organization
+- Update session name to 'Maine' across components
