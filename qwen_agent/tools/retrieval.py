@@ -40,24 +40,20 @@ def _check_deps_for_rag():
 
 @register_tool('retrieval')
 class Retrieval(BaseTool):
-    description = f"从给定文件列表中检索出和问题相关的内容，支持文件类型包括：{' / '.join(PARSER_SUPPORTED_FILE_TYPES)}"
+    description = f"Retrieve relevant content from a given list of files. Supported file types include: {' / '.join(PARSER_SUPPORTED_FILE_TYPES)}"
     parameters = {
         'type': 'object',
         'properties': {
             'query': {
-                'description': '在这里列出关键词，用逗号分隔，目的是方便在文档中匹配到相关的内容，由于文档可能多语言，关键词最好中英文都有。',
+                'description': 'The query keywords for matching relevant document segments. Use comma-separated keywords for better matching (preferably multi-lingual).',
                 'type': 'string',
             },
             'files': {
-                'description': '待解析的文件路径列表，支持本地文件路径或可下载的http(s)链接。',
+                'description': 'A list of file paths (local) or URLs (http/https) to be parsed and searched.',
                 'type': 'array',
                 'items': {
                     'type': 'string'
                 }
-            },
-            'value': {
-                'description': '数据的内容，仅存数据时需要',
-                'type': 'string',
             },
         },
         'required': ['query', 'files'],
@@ -67,7 +63,12 @@ class Retrieval(BaseTool):
         super().__init__(cfg)
         self.max_ref_token: int = self.cfg.get('max_ref_token', DEFAULT_MAX_REF_TOKEN)
         self.parser_page_size: int = self.cfg.get('parser_page_size', DEFAULT_PARSER_PAGE_SIZE)
-        self.doc_parse = DocParser({'max_ref_token': self.max_ref_token, 'parser_page_size': self.parser_page_size})
+        self.work_dir: str = self.cfg.get('work_dir', '')
+        self.doc_parse = DocParser({
+            'max_ref_token': self.max_ref_token,
+            'parser_page_size': self.parser_page_size,
+            'work_dir': self.work_dir
+        })
 
         self.rag_searchers = self.cfg.get('rag_searchers', DEFAULT_RAG_SEARCHERS)
         if len(self.rag_searchers) == 1:

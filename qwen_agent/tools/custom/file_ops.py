@@ -59,30 +59,42 @@ class ReadFile(BaseTool):
             total_lines = len(lines)
             start_idx = max(0, start_line - 1)
             
-            # --- Estimate Hard Character Limit ---
-            # 1/4 of context. Context estimate: max_input_tokens * 4 chars.
-            # So limit is roughly max_input_tokens characters.
+            # --- Simple per-tool chunk limit ---
+            # Cap a single read to ~25% of the context window (in chars).
+            # The orchestrator's _truncate_tool_result() handles the 95% context guard.
             max_input_tokens = 58000
             if hasattr(self, 'agent_pool') and self.agent_pool:
                 llm_cfg = getattr(self.agent_pool, 'llm_cfg', {})
-                max_input_tokens = llm_cfg.get('generate_cfg', {}).get('max_input_tokens', 58000)
+                pool_max = llm_cfg.get('max_input_tokens') or llm_cfg.get('generate_cfg', {}).get('max_input_tokens')
+                if pool_max:
+                    max_input_tokens = int(pool_max)
+            agent_obj = kwargs.get('agent_obj')
+            if agent_obj and hasattr(agent_obj, 'llm') and hasattr(agent_obj.llm, 'generate_cfg'):
+                agent_max = agent_obj.llm.generate_cfg.get('max_input_tokens')
+                if agent_max and agent_max != 58000:
+                    max_input_tokens = int(agent_max)
             
-            char_limit = max_input_tokens
-            # --- End Estimate ---
+            # 25% of context * ~2.5 chars/token
+            char_limit = int(max_input_tokens * 0.25 * 2.5)
+            char_limit = max(500, char_limit)  # floor at 500 chars
 
             end_idx = min(total_lines, start_idx + limit)
             
-            # Build content iteratively to respect character limit
+            # Build content iteratively, respecting the chunk char limit
             content_lines = []
             current_chars = 0
             actual_end_idx = start_idx
             
-            hard_limit_reached = False
             for i in range(start_idx, end_idx):
                 line_text = f"{i+1}: {lines[i]}"
                 if current_chars + len(line_text) > char_limit:
-                    hard_limit_reached = True
+                    if current_chars == 0:
+                        # First line is itself huge — include a truncated portion
+                        cut = min(len(line_text), max(char_limit, 200))
+                        content_lines.append(line_text[:cut] + " ... [LINE TRUNCATED]\n")
+                        actual_end_idx = i + 1
                     break
+                
                 content_lines.append(line_text)
                 current_chars += len(line_text)
                 actual_end_idx = i + 1
@@ -91,17 +103,16 @@ class ReadFile(BaseTool):
             header = f"File content ({path}), lines {start_idx+1} to {actual_end_idx} of {total_lines}:"
             
             if actual_end_idx < total_lines:
-                header += f" [TRUNCATED]"
-                if hard_limit_reached:
-                    header += " [HARD LIMIT REACHED]"
+                header += " [TRUNCATED]"
 
             msg = f"{header}\n```\n{content}\n```"
             
             if actual_end_idx < total_lines:
-                if hard_limit_reached:
-                    msg += f"\n\n[CRITICAL: Hard character limit of {char_limit} reached to prevent context overflow. Only {actual_end_idx - start_idx} lines were read. Use start_line={actual_end_idx+1} to read the next chunk.]"
-                else:
-                    msg += f"\n\n[PAGINATION NOTE: This file is large. Use read_file with start_line={actual_end_idx+1} to read the next {min(limit, total_lines - actual_end_idx)} lines.]"
+                msg += (
+                    f"\n\n[PAGINATION NOTE: This file is large. Use read_file with "
+                    f"start_line={actual_end_idx+1} to read the next "
+                    f"{min(limit, total_lines - actual_end_idx)} lines.]"
+                )
 
             return msg
         except Exception as e:

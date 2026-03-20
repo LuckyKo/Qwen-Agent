@@ -27,12 +27,12 @@ from qwen_agent.tools.storage import KeyNotExistsError, Storage
 
 @register_tool('extract_doc_vocabulary')
 class ExtractDocVocabulary(BaseTool):
-    description = '提取文档的词表。'
+    description = 'Extract the vocabulary of the document.'
     parameters = {
         'type': 'object',
         'properties': {
             'files': {
-                'description': '文件路径列表，支持本地文件路径或可下载的http(s)链接。',
+                'description': 'A list of file paths, supporting local file paths or downloadable http(s) links.',
                 'type': 'array',
                 'items': {
                     'type': 'string'
@@ -44,7 +44,8 @@ class ExtractDocVocabulary(BaseTool):
 
     def __init__(self, cfg: Optional[Dict] = None):
         super().__init__(cfg)
-        self.simple_doc_parse = SimpleDocParser()
+        self.work_dir: str = self.cfg.get('work_dir', '')
+        self.simple_doc_parse = SimpleDocParser(cfg={'work_dir': self.work_dir})
 
         self.data_root = self.cfg.get('path', os.path.join(DEFAULT_WORKSPACE, 'tools', self.name))
         self.db = Storage({'storage_root_path': self.data_root})

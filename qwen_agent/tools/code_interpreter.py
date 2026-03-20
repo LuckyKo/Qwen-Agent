@@ -114,11 +114,14 @@ class CodeInterpreter(BaseToolWithFileAccess):
     def call(self, params: Union[str, dict], files: List[str] = None, timeout: Optional[int] = 30, **kwargs) -> str:
         super().call(params=params, files=files)  # copy remote files to work_dir
 
-        try:
-            params = json5.loads(params)
-            code = params['code']
-        except Exception:
-            code = extract_code(params)
+        if isinstance(params, dict):
+            code = params.get('code', '')
+        else:
+            try:
+                params_dict = json5.loads(params)
+                code = params_dict['code']
+            except Exception:
+                code = extract_code(params)
 
         if not code.strip():
             return ''

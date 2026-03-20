@@ -349,41 +349,78 @@ rules:
             start_idx = 1
             
         messages_to_compress = history[start_idx:]
-        # Ensure we remove at least 1 message if possible
-        num_to_remove = max(1, int(len(messages_to_compress) * fraction))
         
-        # ADJUSTMENT: Ensure the first remaining message is a USER message.
-        # Specifically, we scan forward from num_to_remove to find the NEXT USER message.
-        # However, we must NEVER remove the very last message in the history (which is usually 
-        # the current turn's prompt or assistant/function message).
-        found_user = False
+        from qwen_agent.utils.tokenization_qwen import count_tokens
+        from qwen_agent.utils.utils import extract_text_from_message
+        
+        # Calculate total tokens to find the actual fraction of content to compress
+        total_tokens = 0
+        token_counts = []
+        for msg in messages_to_compress:
+            tokens = agent_obj._count_message_tokens(msg) if agent_obj and hasattr(agent_obj, '_count_message_tokens') else 0
+            if not tokens:
+                # Fallback if agent_obj isn't provided
+                from qwen_agent.utils.tokenization_qwen import count_tokens as qwen_count
+                if isinstance(msg, dict):
+                    role = msg.get('role', '')
+                    function_call = msg.get('function_call')
+                    if role == ASSISTANT and function_call:
+                        tokens = qwen_count(f'{function_call}')
+                    else:
+                        content = extract_text_from_message(Message(**msg), add_upload_info=True)
+                        tokens = qwen_count(content)
+                else:
+                    if msg.role == ASSISTANT and msg.function_call:
+                        tokens = qwen_count(f'{msg.function_call}')
+                    else:
+                        content = extract_text_from_message(msg, add_upload_info=True)
+                        tokens = qwen_count(content)
+                        
+            token_counts.append(tokens)
+            total_tokens += tokens
+            
+        target_tokens = int(total_tokens * fraction)
+        
+        tokens_seen = 0
+        num_to_remove = 0
+        for count in token_counts:
+            tokens_seen += count
+            num_to_remove += 1
+            if tokens_seen >= target_tokens and num_to_remove < len(messages_to_compress) - 1:
+                break
+                
+        # Ensure we remove at least 1 message if possible
+        num_to_remove = max(1, num_to_remove)
+        
+        # ADJUSTMENT: Ensure the first remaining message is a safe boundary.
+        # Specifically, we scan forward from num_to_remove to find a message that is NOT a FUNCTION return.
+        # However, we must NEVER remove the very last message in the history.
+        found_safe = False
         temp_remove = num_to_remove
         while temp_remove < len(messages_to_compress):
             next_msg = messages_to_compress[temp_remove]
             role = next_msg.get('role') if isinstance(next_msg, dict) else getattr(next_msg, 'role', '')
-            if role == USER:
-                found_user = True
+            if role != FUNCTION:
+                found_safe = True
                 num_to_remove = temp_remove
                 break
             temp_remove += 1
             
-        # If we didn't find a USER message by scanning forward, we MUST scan BACKWARD 
-        # from our target to ensure the history we keep starts with a USER message.
-        if not found_user:
+        # If we didn't find a safe message forward, scan BACKWARD.
+        if not found_safe:
             temp_remove = num_to_remove - 1
             while temp_remove >= 0:
                 next_msg = messages_to_compress[temp_remove]
                 role = next_msg.get('role') if isinstance(next_msg, dict) else getattr(next_msg, 'role', '')
-                if role == USER:
-                    found_user = True
+                if role != FUNCTION:
+                    found_safe = True
                     num_to_remove = temp_remove
                     break
                 temp_remove -= 1
         
-        # If we STILL found no USER message (which should be impossible), 
-        # don't remove anything - better to be full than 400 error.
-        if not found_user:
-            logger.warning(f"Compression for {agent_name} could not find a USER message to start with. Skipping compression.")
+        # If STILL none found, don't remove anything to avoid crashes.
+        if not found_safe:
+            logger.warning(f"Compression for {agent_name} could not find a safe boundary to start with. Skipping compression.")
             return
             
         if num_to_remove <= 0:
@@ -392,27 +429,18 @@ rules:
         # Create the summary text
         summary_text = f"\n\n--- CONTEXT COMPRESSED ({int(fraction*100)}% of history summarized) ---\n\nSummary of previous context:\n{summary}\n\n--- END SUMMARY ---"
         
-        # New history: [System (with summary appended)] + [Remaining Messages]
+        # New history: [System (if any)] + [User (with summary)] + [Remaining Messages]
         new_history = []
+        is_dict = isinstance(system_msg, dict) if system_msg else isinstance(messages_to_compress[0], dict)
+        
         if system_msg:
-            # Merge summary INTO the existing system message to avoid a second SYSTEM message
-            if isinstance(system_msg, dict):
-                merged_content = system_msg.get('content', '') + summary_text
-                merged_msg = {**system_msg, 'content': merged_content}
-            else:
-                merged_content = system_msg.content + summary_text
-                merged_msg = Message(role=system_msg.role, content=merged_content)
+            new_history.append(system_msg)
             
-            new_history.append(merged_msg)
-            
-            # Sync back to the agent's base system_message so it persists across turns
-            # (since web_ui.py strips historical system messages to avoid duplicates)
-            if agent_obj and hasattr(agent_obj, 'system_message'):
-                agent_obj.system_message = merged_content
+        if is_dict:
+            new_history.append({'role': USER, 'content': str(summary_text)})
         else:
-            # No system message exists — insert summary as a USER message to stay compliant
-            # Note: In this case, persistence is handled by the USER message itself being in history
-            new_history.append({'role': USER, 'content': summary_text})
+            new_history.append(Message(role=USER, content=str(summary_text)))
+            
         new_history.extend(messages_to_compress[num_to_remove:])
         
         # Modify list in-place so active references (like 'conv' in _stream_sub_agent_call) remain valid!
@@ -535,22 +563,232 @@ class OrchestratorAgent(Assistant):
         from qwen_agent.utils.tokenization_qwen import count_tokens
         self._count_tokens = count_tokens
 
+    def _count_message_tokens(self, msg: Union[Message, dict]) -> int:
+        from qwen_agent.utils.tokenization_qwen import count_tokens as qwen_count
+        
+        # Consistent with base.py's `_count_tokens`
+        if isinstance(msg, dict):
+            role = msg.get('role', '')
+            function_call = msg.get('function_call')
+            # Important: if an assistant message has a function call, base.py counts ONLY the function call string.
+            if role == ASSISTANT and function_call:
+                return qwen_count(f'{function_call}')
+            msg_obj = Message(**msg)
+        else:
+            if msg.role == ASSISTANT and msg.function_call:
+                return qwen_count(f'{msg.function_call}')
+            msg_obj = msg
+            
+        content = extract_text_from_message(msg_obj, add_upload_info=True)
+        return qwen_count(content)
+
     def _get_history_tokens(self, messages: List[Message]) -> int:
         """Calculate total tokens in a message list."""
         total = 0
         for msg in messages:
-            content = extract_text_from_message(msg, add_upload_info=False)
-            total += self._count_tokens(content)
+            total += self._count_message_tokens(msg)
         return total
 
-    def _inject_compression_warning(self, messages: List[Message]):
-        """Inject a warning if context is getting full."""
-        # Get actual max tokens (detected from API or default)
-        max_tokens = self.llm.generate_cfg.get('max_input_tokens', 58000)
-        current_tokens = self._get_history_tokens(messages)
+    def _get_max_tokens(self) -> int:
+        """Resolve the effective max_input_tokens from LLM config.
         
-        if current_tokens > max_tokens * 0.85:
-            usage_pct = (current_tokens / max_tokens) * 100
+        NOTE: We read from self.llm.cfg (the immutable original), NOT from
+        self.llm.generate_cfg, because generate_cfg.pop('max_input_tokens')
+        is called during the first chat() call, removing it permanently.
+        """
+        from qwen_agent.settings import DEFAULT_MAX_INPUT_TOKENS
+        max_tokens = DEFAULT_MAX_INPUT_TOKENS  # 58000
+
+        # 1. Try the LLM's original cfg (immutable source of truth)
+        if hasattr(self, 'llm') and hasattr(self.llm, 'cfg'):
+            cfg = self.llm.cfg
+            # Check generate_cfg sub-dict first, then top-level
+            agent_max = cfg.get('generate_cfg', {}).get('max_input_tokens') or cfg.get('max_input_tokens')
+            if agent_max:
+                max_tokens = int(agent_max)
+
+        # 2. Fallback to pool-level config
+        if max_tokens == DEFAULT_MAX_INPUT_TOKENS and hasattr(self, 'agent_pool') and self.agent_pool:
+            llm_cfg = getattr(self.agent_pool, 'llm_cfg', {})
+            pool_max = (
+                llm_cfg.get('generate_cfg', {}).get('max_input_tokens')
+                or llm_cfg.get('max_input_tokens')
+            )
+            if pool_max:
+                max_tokens = int(pool_max)
+        return max_tokens
+
+    def _truncate_tool_result(
+        self,
+        tool_result: str,
+        tool_name: str,
+        messages: List[Message],
+        instance_name: str,
+    ) -> str:
+        """Truncate a tool result if it would push context past 95% capacity.
+        
+        Token accounting mirrors base.py's _truncate_input_messages_roughly:
+          available_tokens = max_input_tokens - system_message_tokens
+          all_tokens = sum of non-system message tokens
+        This ensures our percentage matches the 'ALL tokens / Available tokens'
+        log in base.py.
+        """
+        if not isinstance(tool_result, str):
+            return tool_result  # multimodal results pass through
+            
+        if tool_name in ['compress_context']:
+            return tool_result
+        
+        max_tokens = self._get_max_tokens()
+        
+        # Mirror base.py token accounting: separate system vs non-system
+        from qwen_agent.utils.tokenization_qwen import count_tokens
+        system_tokens = 0
+        non_system_tokens = 0
+        for msg in messages:
+            tokens = self._count_message_tokens(msg)
+            role = msg.get('role') if isinstance(msg, dict) else getattr(msg, 'role', '')
+            if role == SYSTEM:
+                system_tokens += tokens
+            else:
+                non_system_tokens += tokens
+        
+        available_tokens = max_tokens - system_tokens
+        if available_tokens <= 0:
+            available_tokens = max_tokens  # fallback if system prompt is huge
+        
+        threshold = int(available_tokens * 0.95)
+        
+        # Estimate token count of the result (conservative: ~3 chars/token)
+        result_tokens = max(1, len(tool_result) // 3)
+        
+        if non_system_tokens + result_tokens <= threshold:
+            return tool_result  # Fits fine, no truncation needed
+        
+        # --- Truncation required ---
+        remaining_token_budget = max(200, threshold - non_system_tokens)
+        # Convert back to chars (use 2.5 multiplier to be safe)
+        char_budget = int(remaining_token_budget * 2.5)
+        
+        # Reserve space for the truncation notice itself (~300 chars)
+        char_budget = max(100, char_budget - 300)
+        
+        # Save full result to spill file
+        log_dir = Path('workspace/logs')
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        safe_tool = tool_name.replace('/', '_').replace('\\', '_')
+        safe_instance = instance_name.replace('/', '_').replace('\\', '_')
+        spill_filename = f"{safe_instance}_{safe_tool}_{timestamp}.txt"
+        spill_path = log_dir / spill_filename
+        
+        try:
+            with open(spill_path, 'w', encoding='utf-8') as f:
+                f.write(tool_result)
+        except Exception as e:
+            logger.error(f"Failed to write spill file {spill_path}: {e}")
+            # Even if spill fails, still truncate to prevent context overflow
+        
+        truncated = tool_result[:char_budget]
+        usage_pct = (non_system_tokens / available_tokens) * 100
+        
+        notice = (
+            f"\n\n[TOOL RESPONSE TRUNCATED — Context at {usage_pct:.0f}% capacity "
+            f"({non_system_tokens}/{available_tokens} tokens). "
+            f"Full output ({len(tool_result)} chars) saved to: {spill_path}\n"
+            f"You can read it with read_file if needed. "
+            f"Consider compressing context before continuing.]"
+        )
+        
+        logger.info(
+            f"Truncated '{tool_name}' result for {instance_name}: "
+            f"{len(tool_result)} chars -> {len(truncated)} chars. "
+            f"Context: {non_system_tokens}/{available_tokens} tokens ({usage_pct:.0f}%). "
+            f"Spill file: {spill_path}"
+        )
+        
+        return truncated + notice
+
+    def _inject_compression_warning(self, messages: List[Message]):
+        """Legacy helper for the orchestrator itself."""
+        self._inject_compression_warning_for_agent(self, self.session_name, messages)
+
+    def _inject_compression_warning_for_agent(self, agent, instance_name: str, messages: List[Message]):
+        """Inject a warning or force compression if context is getting full for any agent."""
+        # Get actual max tokens (detected from API or default)
+        max_tokens = 58000
+        if hasattr(agent, 'llm') and hasattr(agent.llm, 'generate_cfg'):
+            agent_max = agent.llm.generate_cfg.get('max_input_tokens')
+            if agent_max and agent_max != 58000:
+                max_tokens = int(agent_max)
+        if max_tokens == 58000 and hasattr(self, 'agent_pool') and self.agent_pool:
+            llm_cfg = getattr(self.agent_pool, 'llm_cfg', {})
+            pool_max = llm_cfg.get('max_input_tokens') or llm_cfg.get('generate_cfg', {}).get('max_input_tokens')
+            if pool_max:
+                max_tokens = int(pool_max)
+
+        current_tokens = self._get_history_tokens(messages)
+        usage_pct = (current_tokens / max_tokens) * 100
+        
+        # 1. Critical Threshold Check (> 95%)
+        if usage_pct > 95.0:
+            logger.info(f"Context usage at {usage_pct:.1f}% for {instance_name} - Triggering FORCEFUL compression.")
+            compress_tool = agent.function_map.get('compress_context')
+            if compress_tool:
+                # Programmatically call the tool's internal compression logic
+                
+                # Call tool directly with 50% fraction
+                params = json.dumps({
+                    'fraction': 0.5, 
+                    'justification': f'CRITICAL THRESHOLD REACHED ({usage_pct:.1f}%)'
+                })
+                
+                # Pass necessary kwargs for direct application
+                result = compress_tool.call(
+                    params, 
+                    messages=messages, 
+                    agent_instance_name=instance_name, 
+                    agent_obj=agent
+                )
+                
+                # Check for failure
+                is_error = isinstance(result, str) and result.startswith('ERROR')
+                if is_error:
+                    logger.error(f"Forceful compression failed for {instance_name}: {result}")
+                    notification = (
+                        f"\n\n[SYSTEM NOTIFICATION: Context window exceeded 95% capacity ({usage_pct:.1f}%), "
+                        f"but automatic compression failed ({result}). The upcoming API call will likely fail due to length.]"
+                    )
+                else:
+                    # Add a system message to inform the agent that it happened
+                    agent_class = self.agent_pool.instance_classes.get(instance_name, 'Unknown')
+                    logger_inst = self.agent_pool.get_logger(instance_name, agent_class)
+                    notification = (
+                        f"\n\n[SYSTEM NOTIFICATION: Context window exceeded 95% capacity ({usage_pct:.1f}%). "
+                        "Forceful compression (50% ratio) has been effectuated to prevent errors. "
+                        f"Use your logs at `{logger_inst.log_path}` if you need to restore details from turns that were removed.]"
+                    )
+                
+                if messages:
+                    last_msg = messages[-1]
+                    if isinstance(last_msg.content, str):
+                        # Prevent duplicate notifications from stacking if the loop repeats
+                        if "[SYSTEM NOTIFICATION: Context window exceeded 95%" not in last_msg.content:
+                            last_msg.content += notification
+                    elif isinstance(last_msg.content, list):
+                        from qwen_agent.llm.schema import ContentItem
+                        
+                        # Prevent duplicate notifications from stacking
+                        has_notification = any(
+                            isinstance(item, ContentItem) and "[SYSTEM NOTIFICATION: Context window exceeded 95%" in getattr(item, 'text', '')
+                            for item in last_msg.content
+                        )
+                        if not has_notification:
+                            last_msg.content.append(ContentItem(text=notification))
+            return
+
+        # 2. Warning Threshold (> 85%)
+        if usage_pct > 85.0:
             warning = (
                 f"\n\n[SYSTEM WARNING: Context window at {usage_pct:.1f}% capacity ({current_tokens}/{max_tokens} tokens). "
                 "Consider using the `compress_context` tool to summarize old history and free up space. "
@@ -566,6 +804,7 @@ class OrchestratorAgent(Assistant):
                 elif isinstance(last_msg.content, list):
                     from qwen_agent.llm.schema import ContentItem
                     last_msg.content.append(ContentItem(text=warning))
+
 
     @property
     def support_multimodal_input(self) -> bool:
@@ -667,6 +906,80 @@ class OrchestratorAgent(Assistant):
                 # Sub-agents are already logged by _stream_sub_agent_call to avoid duplicates.
                 logger_inst.log_message(messages[-1])
 
+        # --- Check for manual commands ---
+        last_msg = messages[-1] if messages else None
+        last_role = last_msg.get('role') if isinstance(last_msg, dict) else getattr(last_msg, 'role', '')
+        
+        cmd_text = ""
+        if last_msg:
+            try:
+                msg_obj = Message(**last_msg) if isinstance(last_msg, dict) else last_msg
+                cmd_text = extract_text_from_message(msg_obj, add_upload_info=False).strip()
+            except Exception:
+                pass
+        
+        if last_role == USER and cmd_text:
+            # --- /compress command ---
+            if cmd_text.startswith('/compress'):
+                parts = cmd_text.split()
+                fraction = 0.5
+                if len(parts) > 1:
+                    try:
+                        fraction = float(parts[1])
+                    except ValueError:
+                        pass
+                
+                compress_tool = self.function_map.get('compress_context')
+                if compress_tool:
+                    messages.pop() # Remove from history
+                    
+                    yield [Message(role=ASSISTANT, content=f"Generating context summary for {int(fraction*100)}% of history...")]
+                    
+                    params = json.dumps({
+                        'fraction': fraction,
+                        'justification': 'MANUAL USER COMMAND (Preview)'
+                    })
+                    
+                    # Generate summary without applying
+                    summary = compress_tool.call(
+                        params,
+                        messages=messages,
+                        agent_instance_name=instance,
+                        agent_obj=self,
+                        dry_run=True  # Ensure it doesn't apply yet
+                    )
+                    
+                    if summary and not summary.startswith("ERROR"):
+                        description = f"Proposed Compression Summary ({int(fraction*100)}% of history)"
+                        approved, reason = self.agent_pool.operation_manager.request_user_approval(
+                            agent_name=instance,
+                            tool_name='compress_context',
+                            tool_args={'fraction': fraction, 'summary': summary},
+                            description=description,
+                        )
+                        
+                        if approved:
+                            # Apply the compression
+                            params = json.dumps({
+                                'fraction': fraction,
+                                'justification': 'MANUAL USER COMMAND (Approved)'
+                            })
+                            result = compress_tool.call(
+                                params,
+                                messages=messages,
+                                agent_instance_name=instance,
+                                agent_obj=self,
+                                precomputed_summary=summary # Skip generation
+                            )
+                            yield [Message(role=ASSISTANT, content=f"Context compressed successfully.\nResult: {result}")]
+                        else:
+                            yield [Message(role=ASSISTANT, content=f"Context compression cancelled: {reason}")]
+                    else:
+                        yield [Message(role=ASSISTANT, content=f"Failed to generate summary: {summary}")]
+                else:
+                    yield [Message(role=ASSISTANT, content="Error: compress_context tool is not available.")]
+                return
+
         # --- Custom FnCallAgent-style loop with streaming sub-agent support ---
         # messages[0] now contains all stabilized instructions, so caches will hit across turns.
         llm_messages = copy.deepcopy(messages)
@@ -690,8 +1003,8 @@ class OrchestratorAgent(Assistant):
             self._inject_compression_warning(llm_messages)
             
             # DEBUG: Inspect message roles to find "Start with User" violations
-            msg_roles = [m.role for m in llm_messages]
-            logger.info(f"LLM Call Order: {msg_roles}")
+            # msg_roles = [m.role for m in llm_messages]
+            # logger.info(f"LLM Call Order: {msg_roles}")
 
             output_stream = self._call_llm(
                 messages=llm_messages,
@@ -792,7 +1105,7 @@ class OrchestratorAgent(Assistant):
                                 
                             try:
                                 tool_result = self._call_tool(
-                                    tool_name, tool_args, messages=messages, 
+                                    tool_name, tool_args, messages=llm_messages, 
                                     **call_kwargs
                                 )
                             except Exception as e:
@@ -822,7 +1135,7 @@ class OrchestratorAgent(Assistant):
                         call_kwargs['agent_obj'] = self
                         try:
                             tool_result = self._call_tool(
-                                tool_name, tool_args, messages=messages, 
+                                tool_name, tool_args, messages=llm_messages, 
                                 **call_kwargs
                             )
                         except Exception as e:
@@ -830,12 +1143,12 @@ class OrchestratorAgent(Assistant):
                             tool_result = f"Error: {e}"
                             if "valid JSON" in str(e) and isinstance(tool_args, str):
                                 tool_result += f"\nYour arguments: {tool_args[:200]}..."
-                    
-                    if tool_name == 'compress_context':
-                        # Sync llm_messages with the newly compressed history in 'messages'.
-                        # This stops the LLM from re-evaluating the huge context mid-turn.
-                        llm_messages = copy.deepcopy(messages)
-                        logger.info(f"Synced llm_messages for {self.name} after context compression.")
+
+                # --- Generic truncation: protect ALL tool results ---
+                if isinstance(tool_result, str):
+                    tool_result = self._truncate_tool_result(
+                        tool_result, tool_name, llm_messages, self.session_name
+                    )
 
                 fn_msg = Message(
                     role=FUNCTION,
@@ -1069,6 +1382,17 @@ class OrchestratorAgent(Assistant):
         # Run the sub-agent as a generator
         final_resp: list = []
         try:
+            # ── Monkey-patch sub-agent's _call_llm to enforce compression ──
+            if not hasattr(agent, '_original_call_llm'):
+                agent._original_call_llm = agent._call_llm
+
+                def hooked_call_llm(self_agent, messages: List[Message], **kwargs_llm):
+                    self._inject_compression_warning_for_agent(self_agent, instance_name, messages)
+                    return self_agent._original_call_llm(messages, **kwargs_llm)
+
+                import types
+                agent._call_llm = types.MethodType(hooked_call_llm, agent)
+            
             # agent.run mutates the passed list, so we pass a copy to avoid double-appending
             # when we do state['messages'] = conv + resp
             run_conv = copy.deepcopy(conv)
@@ -1366,7 +1690,7 @@ def load_sub_agent_with_tools(agent_pool: AgentPool, agent_name: str, llm_cfg: d
         agent.function_map['code_interpreter'] = code_tool
     except Exception as e:
         logger.warning(f"Failed to load CodeInterpreter for agent {agent_name}: {e}")
-        print(f"[WARNING] 🐳 CodeInterpreter disabled for '{agent_name}': {e}")
+        print(f"[WARNING] CodeInterpreter disabled for '{agent_name}': {e}")
     
     edit_tool = EditFile()
     edit_tool.agent_pool = agent_pool
@@ -1395,6 +1719,18 @@ def load_sub_agent_with_tools(agent_pool: AgentPool, agent_name: str, llm_cfg: d
     move_tool.agent_pool = agent_pool
     move_tool.agent_name = agent_name
     agent.function_map['move_file'] = move_tool
+    
+    from qwen_agent.tools.web_extractor import WebExtractor
+    agent.function_map['web_extractor'] = WebExtractor(cfg={'work_dir': 'workspace'})
+    
+    from qwen_agent.tools.storage import Storage
+    agent.function_map['storage'] = Storage() # Storage uses DEFAULT_WORKSPACE/tools/storage
+    
+    from qwen_agent.tools.retrieval import Retrieval
+    agent.function_map['retrieval'] = Retrieval(cfg={'work_dir': 'workspace'})
+
+    from qwen_agent.tools.extract_doc_vocabulary import ExtractDocVocabulary
+    agent.function_map['extract_doc_vocabulary'] = ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
     
     compress_tool = CompressContext()
     compress_tool.agent_pool = agent_pool

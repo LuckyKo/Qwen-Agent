@@ -61,8 +61,8 @@ class OperationManager:
     """
 
     def __init__(self, base_dir: str = 'workspace', agent_pool=None):
-        self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(exist_ok=True)
+        self.base_dir = Path(base_dir).resolve()
+        self.base_dir.mkdir(parents=True, exist_ok=True)
         self.agent_pool = agent_pool
 
         # Currently pending approvals (request_id -> PendingApproval)
@@ -187,11 +187,15 @@ class OperationManager:
         """Resolve a path to be within the base directory (security)."""
         try:
             resolved = (self.base_dir / path).resolve()
-            if not str(resolved).startswith(str(self.base_dir.resolve())):
-                raise ValueError(f"Path '{path}' is outside the allowed directory")
+            if not str(resolved).startswith(str(self.base_dir)):
+                # Handle potential case-sensitivity issues on Windows by lowercase comparison
+                if os.name == 'nt' and not str(resolved).lower().startswith(str(self.base_dir).lower()):
+                    raise ValueError(f"Path '{path}' is outside the allowed directory")
+                elif os.name != 'nt':
+                     raise ValueError(f"Path '{path}' is outside the allowed directory")
             return resolved
         except Exception:
-            return self.base_dir / path
+            return (self.base_dir / path).resolve()
 
     # ─── Read Operations (Free Access) ────────────────────────────────────
 
@@ -248,19 +252,27 @@ class OperationManager:
             for file_path in resolved.rglob(include):
                 if file_path.is_file():
                     try:
-                        content = file_path.read_text(encoding='utf-8')
+                        content = file_path.read_text(encoding='utf-8', errors='ignore')
                         lines = content.split('\n')
                         for line_num, line in enumerate(lines, 1):
                             if pattern_re.search(line):
-                                rel_path = file_path.relative_to(self.base_dir)
+                                try:
+                                    rel_path = file_path.relative_to(self.base_dir)
+                                except ValueError:
+                                    rel_path = file_path.name # Fallback
                                 results.append(f"{rel_path}:{line_num}: {line.strip()}")
+                        if len(results) > 100: # Practical limit
+                            break
                     except:
                         continue
 
             if not results:
                 return f"No matches found for pattern '{pattern}' in {path}/**/{include}"
 
-            return f"Found {len(results)} matches for '{pattern}':\n\n" + '\n'.join(results[:50])
+            summary = f"Found {len(results)} matches for '{pattern}'"
+            if len(results) > 50:
+                summary += " (showing first 50)"
+            return f"{summary}:\n\n" + '\n'.join(results[:50])
         except Exception as e:
             return f"Error searching: {str(e)}"
 

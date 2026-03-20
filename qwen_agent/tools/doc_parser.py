@@ -55,12 +55,12 @@ class Record(BaseModel):
 
 @register_tool('doc_parser')
 class DocParser(BaseTool):
-    description = '对一个文件进行内容提取和分块、返回分块后的文件内容'
+    description = 'Extract and chunk the content of a document, returning the chunked content.'
     parameters = {
         'type': 'object',
         'properties': {
             'url': {
-                'description': '待解析的文件的路径，可以是一个本地路径或可下载的http(s)链接',
+                'description': 'The path to the file to be parsed, which can be a local path or a downloadable http(s) link.',
                 'type': 'string',
             }
         },
@@ -73,9 +73,10 @@ class DocParser(BaseTool):
         self.parser_page_size: int = self.cfg.get('parser_page_size', DEFAULT_PARSER_PAGE_SIZE)
 
         self.data_root = self.cfg.get('path', os.path.join(DEFAULT_WORKSPACE, 'tools', self.name))
+        self.work_dir = self.cfg.get('work_dir', DEFAULT_WORKSPACE)
         self.db = Storage({'storage_root_path': self.data_root})
 
-        self.doc_extractor = SimpleDocParser({'structured_doc': True})
+        self.doc_extractor = SimpleDocParser({'structured_doc': True, 'work_dir': self.work_dir})
 
     def call(self, params: Union[str, dict], **kwargs) -> dict:
         """Extracting and blocking

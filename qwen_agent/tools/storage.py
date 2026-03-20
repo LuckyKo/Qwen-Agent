@@ -27,23 +27,24 @@ class KeyNotExistsError(ValueError):
 @register_tool('storage')
 class Storage(BaseTool):
     """
-    This is a special tool for data storage
+    A tool for persistent data storage and retrieval. 
+    Allows agents to save, read, delete, and scan information using key-value pairs.
     """
-    description = '存储和读取数据的工具'
+    description = 'A tool for storing and retrieving data.'
     parameters = {
         'type': 'object',
         'properties': {
             'operate': {
-                'description': '数据操作类型，可选项为["put", "get", "delete", "scan"]之一，分别为存数据、取数据、删除数据、遍历数据',
+                'description': 'The type of data operation: "put" (save data), "get" (read data), "delete" (remove data), or "scan" (list/read multiple items).',
                 'type': 'string',
             },
             'key': {
-                'description': '数据的路径，类似于文件路径，是一份数据的唯一标识，不能为空，默认根目录为`/`。存数据时，应该合理的设计路径，保证路径含义清晰且唯一。',
+                'description': 'The unique identifier (path-like) for the data. Use "/" as the default root. Design clear and unique paths (e.g., "/notes/summary").',
                 'type': 'string',
                 'default': '/'
             },
             'value': {
-                'description': '数据的内容，仅存数据时需要',
+                'description': 'The content to be stored. Required only for the "put" operation.',
                 'type': 'string',
             },
         },
@@ -83,7 +84,7 @@ class Storage(BaseTool):
             os.makedirs(path_dir, exist_ok=True)
 
         save_text_to_file(path, value)
-        return f'Successfully saved {key}.'
+        return f'Successfully saved content to key: {key}'
 
     def get(self, key: str, path: Optional[str] = None) -> str:
         path = path or self.root
@@ -105,7 +106,7 @@ class Storage(BaseTool):
         path = os.path.join(path, key)
         if os.path.exists(path):
             if not os.path.isdir(path):
-                return 'Scan Failed: The scan operation requires passing in a folder path as the key.'
+                return 'Scan Failed: The scan operation requires a folder path (directory key).'
             # All key-value pairs
             kvs = {}
             for root, dirs, files in os.walk(path):

@@ -78,7 +78,7 @@ llm_cfg = {
     'model_server': 'http://localhost:1234/v1',
     'api_key': 'EMPTY',
     'model_type': 'qwenvl_oai',  # Force multimodal support
-    'max_input_tokens': 32768,   # Custom context window limit (override detection)
+    'max_input_tokens': 65536,   # Custom context window limit (override detection)
 }
 
 # Define default tools for each agent type
@@ -87,23 +87,23 @@ DEFAULT_TOOLS = {
     'orchestrator': [
         'call_agent', 'dismiss_agent', 'list_agents',
         'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'read_file', 'view_image', 'list_dir', 'grep',
-        'ddg_search', 'web_extractor'
+        'ddg_search', 'web_extractor', 'storage', 'retrieval'
     ],
     'coder': [
         'call_agent', 'list_agents',
         'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'list_dir', 'grep', 'code_interpreter', 'shell_cmd',
-        'ddg_search', 'web_extractor'
+        'ddg_search', 'web_extractor', 'storage'
     ],
     'researcher': [
         'call_agent', 'list_agents',
         'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'list_dir', 'grep', 'code_interpreter',
-        'ddg_search', 'web_extractor',
+        'ddg_search', 'web_extractor', 'storage', 'retrieval',
         'doc_parser', 'simple_doc_parser', 'extract_doc_vocabulary'
     ],
     'writer': [
         'call_agent', 'list_agents',
         'read_file', 'view_image', 'compress_context', 'write_file', 'edit_file', 'list_dir',
-        'ddg_search', 'web_extractor',
+        'ddg_search', 'web_extractor', 'storage',
         'doc_parser', 'simple_doc_parser'
     ],
     'reviewer': [
@@ -114,7 +114,7 @@ DEFAULT_TOOLS = {
 
 # Tools available to ALL agents (shown in UI but disabled by default)
 ALL_BUILTIN_TOOLS = [
-    'image_gen', 'storage', 'code_interpreter', 'python_executor',
+    'image_gen', 'storage', 'retrieval', 'code_interpreter', 'python_executor',
     'delete_file', 'shell_cmd', # These are powerful - enable manually
 ]
 
@@ -145,19 +145,23 @@ if __name__ == '__main__':
                     pass
             
             if 'web_extractor' in default_tools:
-                agent.function_map['web_extractor'] = web_extractor.WebExtractor()
+                agent.function_map['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': 'workspace'})
             
             if 'storage' in default_tools:
                 agent.function_map['storage'] = storage.Storage()
             
+            if 'retrieval' in default_tools:
+                from qwen_agent.tools import retrieval
+                agent.function_map['retrieval'] = retrieval.Retrieval(cfg={'work_dir': 'workspace'})
+            
             if 'simple_doc_parser' in default_tools:
-                agent.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser()
+                agent.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': 'workspace'})
             
             if 'doc_parser' in default_tools:
-                agent.function_map['doc_parser'] = doc_parser.DocParser()
+                agent.function_map['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': 'workspace'})
             
             if 'extract_doc_vocabulary' in default_tools:
-                agent.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary()
+                agent.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
             
             if 'code_interpreter' in default_tools:
                 try:
@@ -167,7 +171,7 @@ if __name__ == '__main__':
             
             if 'python_executor' in default_tools:
                 try:
-                    agent.function_map['python_executor'] = python_executor.PythonExecutor()
+                    agent.function_map['python_executor'] = python_executor.PythonExecutor(cfg={'work_dir': 'workspace'})
                 except Exception:
                     pass
 
@@ -186,19 +190,23 @@ if __name__ == '__main__':
             pass
 
     if 'web_extractor' in default_orch_tools:
-        orchestrator.function_map['web_extractor'] = web_extractor.WebExtractor()
+        orchestrator.function_map['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': 'workspace'})
 
     if 'storage' in default_orch_tools:
         orchestrator.function_map['storage'] = storage.Storage()
 
+    if 'retrieval' in default_orch_tools:
+        from qwen_agent.tools import retrieval
+        orchestrator.function_map['retrieval'] = retrieval.Retrieval(cfg={'work_dir': 'workspace'})
+
     if 'simple_doc_parser' in default_orch_tools:
-        orchestrator.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser()
+        orchestrator.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': 'workspace'})
 
     if 'doc_parser' in default_orch_tools:
-        orchestrator.function_map['doc_parser'] = doc_parser.DocParser()
+        orchestrator.function_map['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': 'workspace'})
 
     if 'extract_doc_vocabulary' in default_orch_tools:
-        orchestrator.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary()
+        orchestrator.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
 
     if 'code_interpreter' in default_orch_tools:
         try:
@@ -208,7 +216,7 @@ if __name__ == '__main__':
 
     if 'python_executor' in default_orch_tools:
         try:
-            orchestrator.function_map['python_executor'] = python_executor.PythonExecutor()
+            orchestrator.function_map['python_executor'] = python_executor.PythonExecutor(cfg={'work_dir': 'workspace'})
         except Exception:
             pass
 

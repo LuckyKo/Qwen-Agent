@@ -365,7 +365,7 @@ def table_converter(table):
     return table_string
 
 
-PARSER_SUPPORTED_FILE_TYPES = ['pdf', 'docx', 'pptx', 'txt', 'html', 'csv', 'tsv', 'xlsx', 'xls']
+PARSER_SUPPORTED_FILE_TYPES = ['pdf', 'docx', 'pptx', 'md', 'txt', 'html', 'csv', 'tsv', 'xlsx', 'xls']
 
 
 def get_plain_doc(doc: list):
@@ -380,12 +380,12 @@ def get_plain_doc(doc: list):
 
 @register_tool('simple_doc_parser')
 class SimpleDocParser(BaseTool):
-    description = f"提取出一个文档的内容，支持类型包括：{' / '.join(PARSER_SUPPORTED_FILE_TYPES)}"
+    description = f"Extract the content of a document. Supported types include: {' / '.join(PARSER_SUPPORTED_FILE_TYPES)}"
     parameters = {
         'type': 'object',
         'properties': {
             'url': {
-                'description': '待提取的文件的路径，可以是一个本地路径或可下载的http(s)链接',
+                'description': 'The path to the file to be extracted, which can be a local path or a downloadable http(s) link.',
                 'type': 'string',
             }
         },
@@ -395,6 +395,7 @@ class SimpleDocParser(BaseTool):
     def __init__(self, cfg: Optional[Dict] = None):
         super().__init__(cfg)
         self.data_root = self.cfg.get('path', os.path.join(DEFAULT_WORKSPACE, 'tools', self.name))
+        self.work_dir = self.cfg.get('work_dir', DEFAULT_WORKSPACE)
         self.extract_image = self.cfg.get('extract_image', False)
         self.structured_doc = self.cfg.get('structured_doc', False)
 
@@ -422,6 +423,11 @@ class SimpleDocParser(BaseTool):
 
         params = self._verify_json_format_args(params)
         path = params['url']
+        
+        # Resolve relative local paths against work_dir
+        if not is_http_url(path) and not os.path.isabs(path):
+            path = os.path.join(self.work_dir, path)
+            
         cached_name_ori = f'{hash_sha256(path)}_ori'
         try:
             # Directly load the parsed doc
@@ -461,6 +467,8 @@ class SimpleDocParser(BaseTool):
                     parsed_file = parse_csv(path, self.extract_image)
                 elif f_type == 'tsv':
                     parsed_file = parse_tsv(path, self.extract_image)
+                elif f_type == 'md':
+                    parsed_file = parse_txt(path)
                 elif f_type in ['xlsx', 'xls']:
                     parsed_file = parse_excel(path, self.extract_image)
                 else:

@@ -26,9 +26,10 @@ def test_amap_weather(params):
     tool.call(params)
 
 
-def test_code_interpreter():
+@pytest.mark.parametrize('params', ["print('hello qwen')", {'code': "print('hello qwen')"}])
+def test_code_interpreter(params):
     tool = CodeInterpreter()
-    tool.call("print('hello qwen')")
+    tool.call(params)
 
 
 def test_image_gen():

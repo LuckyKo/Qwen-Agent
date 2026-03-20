@@ -118,6 +118,7 @@ class PythonExecutor(BaseTool):
         get_answer_expr: Optional[str] = self.cfg.get('get_answer_expr', None)
         get_answer_from_stdout: bool = self.cfg.get('get_answer_from_stdout', True)
         timeout_length: int = self.cfg.get('timeout_length', 20)
+        self.work_dir: str = self.cfg.get('work_dir', '')
 
         self.runtime = runtime if runtime else GenericRuntime()
         self.answer_symbol = get_answer_symbol
@@ -128,12 +129,16 @@ class PythonExecutor(BaseTool):
 
     def call(self, params: Union[str, dict], **kwargs) -> list:
         try:
-            params = json5.loads(params)
-            code = params['code']
+            params = self._verify_json_format_args(params)
+            code = params.get('code', '')
         except Exception:
-            code = extract_code(params)
+            if isinstance(params, dict):
+                params_str = json.dumps(params)
+            else:
+                params_str = params
+            code = extract_code(params_str)
 
-        if not code.strip():
+        if not str(code).strip():
             return ['', '']
 
         predictions = self.apply(code)
@@ -153,30 +158,53 @@ class PythonExecutor(BaseTool):
         answer_symbol=None,
         answer_expr=None,
         timeout_length=20,
+        work_dir='',
     ):
         from timeout_decorator import timeout
+        import signal
+        use_timeout = hasattr(signal, 'SIGALRM')
+        old_cwd = os.getcwd()
+        
         try:
+            if work_dir:
+                os.makedirs(work_dir, exist_ok=True)
+                os.chdir(work_dir)
+            
             if get_answer_from_stdout:
                 program_io = io.StringIO()
                 with redirect_stdout(program_io):
-                    timeout(timeout_length)(runtime.exec_code)('\n'.join(code))
+                    if use_timeout:
+                        timeout(timeout_length)(runtime.exec_code)('\n'.join(code))
+                    else:
+                        runtime.exec_code('\n'.join(code))
                 program_io.seek(0)
                 result = program_io.read()
             elif answer_symbol:
-                timeout(timeout_length)(runtime.exec_code)('\n'.join(code))
+                if use_timeout:
+                    timeout(timeout_length)(runtime.exec_code)('\n'.join(code))
+                else:
+                    runtime.exec_code('\n'.join(code))
                 result = runtime._global_vars[answer_symbol]
             elif answer_expr:
-                timeout(timeout_length)(runtime.exec_code)('\n'.join(code))
-                result = timeout(timeout_length)(runtime.eval_code)(answer_expr)
+                if use_timeout:
+                    timeout(timeout_length)(runtime.exec_code)('\n'.join(code))
+                    result = timeout(timeout_length)(runtime.eval_code)(answer_expr)
+                else:
+                    runtime.exec_code('\n'.join(code))
+                    result = runtime.eval_code(answer_expr)
             else:
-                timeout(timeout_length)(runtime.exec_code)('\n'.join(code[:-1]))
-                result = timeout(timeout_length)(runtime.eval_code)(code[-1])
+                if use_timeout:
+                    timeout(timeout_length)(runtime.exec_code)('\n'.join(code[:-1]))
+                    result = timeout(timeout_length)(runtime.eval_code)(code[-1])
+                else:
+                    runtime.exec_code('\n'.join(code[:-1]))
+                    result = runtime.eval_code(code[-1])
             report = 'Done'
             str(result)
             pickle.dumps(result)  # serialization check
-        except Exception:
-            result = ''
             report = traceback.format_exc().split('\n')[-2]
+        finally:
+            os.chdir(old_cwd)
         return result, report
 
     @staticmethod
@@ -200,6 +228,7 @@ class PythonExecutor(BaseTool):
                 answer_symbol=self.answer_symbol,
                 answer_expr=self.answer_expr,
                 timeout_length=self.timeout_length,  # this timeout not work
+                work_dir=self.work_dir,
             )
             future = pool.map(executor, all_code_snippets, timeout=self.timeout_length)
             iterator = future.result()

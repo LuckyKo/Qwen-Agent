@@ -241,7 +241,7 @@ def get_content_type_by_head_request(path: str) -> str:
 
 def get_file_type(path: str) -> Literal['pdf', 'docx', 'pptx', 'txt', 'html', 'csv', 'tsv', 'xlsx', 'xls', 'unk']:
     f_type = get_basename_from_url(path).split('.')[-1].lower()
-    if f_type in ['pdf', 'docx', 'pptx', 'csv', 'tsv', 'xlsx', 'xls']:
+    if f_type in ['pdf', 'docx', 'pptx', 'csv', 'tsv', 'xlsx', 'xls', 'md']:
         # Specially supported file types
         return f_type
 
@@ -283,7 +283,10 @@ def extract_markdown_urls(md_text: str) -> List[str]:
     return urls
 
 
-def extract_code(text: str) -> str:
+def extract_code(text: Union[str, dict]) -> str:
+    if isinstance(text, dict):
+        return text.get('code', '')
+
     # Match triple backtick blocks first
     triple_match = re.search(r'```[^\n]*\n(.+?)```', text, re.DOTALL)
     if triple_match:
