@@ -65,6 +65,7 @@ class AgentPool:
     def __init__(self, llm_cfg: dict, agents_dir: str = 'agents'):
         self.llm_cfg = llm_cfg
         self.agents_dir = Path(agents_dir)
+        
         # Agent templates (loaded by class name)
         self.agents: Dict[str, Assistant] = {}
         self.agent_configs: Dict[str, dict] = {}
@@ -93,6 +94,9 @@ class AgentPool:
         
         # Explicit stop flag for cancellation
         self.stopped = False
+        
+        # Async message queue for injecting user messages mid-generation
+        self.async_message_queue: List[str] = []
         
         # Auto-load all agents from the agents directory
         self._discover_agents()
@@ -824,18 +828,15 @@ class OrchestratorAgent(Assistant):
         # Clear active stack only for the root turn to avoid state leakage
         if not kwargs.get('agent_instance_name'):
             self.agent_pool.active_stack.clear()
+            
+        instance = kwargs.get('agent_instance_name') or self.session_name
+        self.session_name = instance # Track current instance name
         
         # Prepend knowledge like Assistant does
         messages = self._prepend_knowledge_prompt(
             messages=messages, lang=lang, knowledge=knowledge, **kwargs
         )
         
-        # Identity formatting: Use only the instance name for sessions
-        instance = kwargs.get('agent_instance_name') or self.session_name
-        self.session_name = instance # Track current instance name
-        # DO NOT update self.name = instance; it breaks WebUI indexing which relies on static agent names.
-        
-        # Prepare appropriate logger (Main Session or Sub-Agent Instance)
         # Using the base agent_type for the class metadata field keeps logs clean.
         logger_inst = self.agent_pool.get_logger(instance, self.agent_type)
         
@@ -886,7 +887,7 @@ class OrchestratorAgent(Assistant):
                                 res_append += f"- **{t_name}**: {desc}\n"
                         else: res_append += "- None currently enabled.\n"
                         m0_content += res_append
-
+                    
                     # 4. Inject Argument Reuse instructions (Static version for caching)
                     if '### Advanced Feature: Argument Reuse' not in m0_content:
                         m0_content += (
@@ -897,14 +898,13 @@ class OrchestratorAgent(Assistant):
                     
                     if isinstance(m0, dict): m0['content'] = m0_content
                     else: m0.content = m0_content
-
-            # Sync initial state if history is empty
-            if not logger_inst.data["history"]:
-                logger_inst.update_history(messages)
-            elif not kwargs.get('agent_instance_name'):
-                # Only log the last message for the main orchestrator session.
-                # Sub-agents are already logged by _stream_sub_agent_call to avoid duplicates.
-                logger_inst.log_message(messages[-1])
+        # Sync initial state if history is empty
+        if not logger_inst.data["history"]:
+            logger_inst.update_history(messages)
+        elif not kwargs.get('agent_instance_name'):
+            # Only log the last message for the main orchestrator session.
+            # Sub-agents are already logged by _stream_sub_agent_call to avoid duplicates.
+            logger_inst.log_message(messages[-1])
 
         # --- Check for manual commands ---
         last_msg = messages[-1] if messages else None
@@ -956,7 +956,7 @@ class OrchestratorAgent(Assistant):
                             tool_name='compress_context',
                             tool_args={'fraction': fraction, 'summary': summary},
                             description=description,
-                        )
+                            )
                         
                         if approved:
                             # Apply the compression
@@ -983,7 +983,7 @@ class OrchestratorAgent(Assistant):
         # --- Custom FnCallAgent-style loop with streaming sub-agent support ---
         # messages[0] now contains all stabilized instructions, so caches will hit across turns.
         llm_messages = copy.deepcopy(messages)
-                
+            
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         response: List[Message] = []
 
@@ -994,50 +994,61 @@ class OrchestratorAgent(Assistant):
                 break
                 
             num_llm_calls_available -= 1
-
+    
             extra_generate_cfg = {'lang': lang}
             if kwargs.get('seed') is not None:
                 extra_generate_cfg['seed'] = kwargs['seed']
-
+    
+            # --- ASYNC MESSAGE INJECTION ---
+            if hasattr(self.agent_pool, 'async_message_queue') and self.agent_pool.async_message_queue:
+                while self.agent_pool.async_message_queue:
+                    async_msg_text = self.agent_pool.async_message_queue.pop(0)
+                    async_msg = Message(role=USER, content=f"[ASYNC INTERRUPTION]: {async_msg_text}")
+                    messages.append(async_msg)
+                    llm_messages.append(async_msg)
+                    response.append(async_msg)
+                    logger.info(f"Injected async user message into {self.name}: {async_msg_text}")
+                yield response  # Update UI with the injected message
+                
             # Inject warning if needed (only for the LLM call, doesn't affect saved history)
             self._inject_compression_warning(llm_messages)
             
             # DEBUG: Inspect message roles to find "Start with User" violations
             # msg_roles = [m.role for m in llm_messages]
             # logger.info(f"LLM Call Order: {msg_roles}")
-
+    
             output_stream = self._call_llm(
                 messages=llm_messages,
                 functions=[func.function for func in self.function_map.values()],
                 extra_generate_cfg=extra_generate_cfg,
             )
-
+    
             output: List[Message] = []
             for output in output_stream:
                 if output:
                     yield response + output
-
+    
             if not output:
                 break
-
+    
             response.extend(output)
             messages.extend(output)
             llm_messages.extend(output)
-
+    
             # Log generated messages
             for msg in output:
                 logger_inst.log_message(msg)
-
+    
             used_any_tool = False
             for out in output:
                 use_tool, tool_name, tool_args, _ = self._detect_tool(out)
                 if not use_tool:
                     continue
-
+    
                 used_any_tool = True
                 # Yield the tool call request immediately so UI sees "calling tool..."
                 yield response
-
+    
                 if tool_name in self.STREAMING_TOOLS:
                     # ── Streaming sub-agent call ──
                     tool_result = yield from self._stream_sub_agent_call(
@@ -1143,13 +1154,13 @@ class OrchestratorAgent(Assistant):
                             tool_result = f"Error: {e}"
                             if "valid JSON" in str(e) and isinstance(tool_args, str):
                                 tool_result += f"\nYour arguments: {tool_args[:200]}..."
-
+    
                 # --- Generic truncation: protect ALL tool results ---
                 if isinstance(tool_result, str):
                     tool_result = self._truncate_tool_result(
                         tool_result, tool_name, llm_messages, self.session_name
                     )
-
+    
                 fn_msg = Message(
                     role=FUNCTION,
                     name=tool_name,
@@ -1166,17 +1177,29 @@ class OrchestratorAgent(Assistant):
                 # Log just the function result (LLM output already logged above)
                 logger_inst.log_message(fn_msg)
                 
+                # --- ASYNC MESSAGE INJECTION (URGENT) ---
+                if hasattr(self.agent_pool, 'async_message_queue') and self.agent_pool.async_message_queue:
+                    while self.agent_pool.async_message_queue:
+                        async_msg_text = self.agent_pool.async_message_queue.pop(0)
+                        async_msg = Message(role=USER, content=f"[ASYNC INTERRUPTION]: {async_msg_text}")
+                        messages.append(async_msg)
+                        llm_messages.append(async_msg)
+                        response.append(async_msg)
+                        logger.info(f"Injected urgent async user message mid-tool-loop into {self.name}: {async_msg_text}")
+                    yield response
+                    break  # CRITICAL: Stop executing the rest of the batched tools!
+                    
                 yield response
-
+    
             if not used_any_tool:
                 break
-
-        # No final update_history needed: all messages are logged individually
-        # via log_message above (LLM output at line 502, fn results at line 542).
-        
-        # Expose the final context for the WebUI so it can detect if a compression 
-        # occurred and mutated the history mid-turn.
-        self.turn_final_messages = messages
+    
+            # No final update_history needed: all messages are logged individually
+            # via log_message above (LLM output at line 502, fn results at line 542).
+            
+            # Expose the final context for the WebUI so it can detect if a compression 
+            # occurred and mutated the history mid-turn.
+            self.turn_final_messages = messages
 
         yield response
 

@@ -179,6 +179,20 @@ class WebUI:
                             stop_btn = gr.Button("⏹️ Stop", variant="secondary")
                             retry_btn = gr.Button("🔄 Retry", variant="secondary")
                             reset_btn = gr.Button("🗑️ Reset Chat", variant="danger")
+                        
+                        gr.Markdown("---")
+                        gr.Markdown("### ⚡ Async Steering (Always Active)")
+                        with gr.Row():
+                            async_steering_box = gr.Textbox(
+                                label="Urgent Message / Interruption",
+                                placeholder="Type here to inject a message even while the agent is generating...",
+                                lines=1,
+                                scale=4
+                            )
+                            async_steering_btn = gr.Button("Inject", variant="primary", scale=1)
+                        gr.Markdown("---")
+                        
+                        active_stack_out = gr.JSON(label="Active Agent Stack", value=[], visible=False)
                         audio_input = gr.Audio(
                             sources=["microphone"],
                             type="filepath"
@@ -311,7 +325,7 @@ class WebUI:
                     else:
                         input_promise = input_promise.then(
                             self.agent_run,
-                            [chatbot, history, agent_selector, slot_map, slot_last_active, session_name] + sub_chatbots + sub_statuses,
+                            [chatbot, history, agent_selector, slot_map, slot_last_active] + sub_chatbots + sub_statuses + [session_name],
                             [chatbot, history, agent_selector, slot_map, slot_last_active, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                             queue=True,
                         )
@@ -360,7 +374,7 @@ class WebUI:
                     
                     retry_promise = retry_btn.click(
                         fn=self.retry_chat,
-                        inputs=[chatbot, history, agent_selector, slot_map, slot_last_active] + sub_chatbots + sub_statuses,
+                        inputs=[chatbot, history, agent_selector, slot_map, slot_last_active] + sub_chatbots + sub_statuses + [session_name],
                         outputs=[chatbot, history, agent_selector, slot_map, slot_last_active, sub_agent_tabs] + sub_tabs + sub_chatbots + sub_statuses,
                     )
                     
@@ -378,6 +392,57 @@ class WebUI:
                     ).then(
                         fn=lambda: None,
                         outputs=[log_load_file]
+                    )
+
+                    # --- Event Handlers for Async Injection ---
+                    def inject_async(text, agent_sel, session_name_val, chatbot_value):
+                        if not text.strip():
+                            # Get current active stack if possible
+                            active_stack = getattr(self.agent_list[0], 'agent_pool', None).active_stack if hasattr(self.agent_list[0], 'agent_pool') else []
+                            return "", active_stack, chatbot_value
+                        
+                        # Determine the correct instance name for logging.
+                        # agent_sel is the index from agent_selector (Main is 0).
+                        # If it's the main agent (0), use the custom session name (e.g. 'Maine').
+                        if agent_sel == 0:
+                            instance_to_log = session_name_val
+                        else:
+                            instance_to_log = self.agent_list[agent_sel].name
+                            
+                        # Get the agent pool from the main agent
+                        _agent = self.agent_list[0]
+                        _agent_pool = getattr(_agent, 'agent_pool', None)
+                        if not _agent_pool:
+                            return "", [], chatbot_value
+                            
+                        # 1. Update the in-memory active conversation if it exists
+                        if instance_to_log in _agent_pool.instance_conversations:
+                            _agent_pool.instance_conversations[instance_to_log].append(Message(role=USER, content=text))
+                        
+                        # 2. Log to the persistent history file
+                        logger_inst = _agent_pool.get_logger(instance_to_log, "Orchestrator")
+                        logger_inst.log_message(Message(role=USER, content=text))
+                        
+                        # 3. Append to the queue for potential mid-turn injection
+                        _agent_pool.async_message_queue.append(text)
+                        print(f"Injecting async message into {instance_to_log}: {text}")
+                        
+                        # 4. Immediately update the chatbot UI
+                        new_chatbot = chatbot_value + [(text, None)]
+                        return "", _agent_pool.active_stack, new_chatbot
+
+                    async_steering_btn.click(
+                        fn=inject_async,
+                        inputs=[async_steering_box, agent_selector, session_name, chatbot],
+                        outputs=[async_steering_box, active_stack_out, chatbot],
+                        queue=False
+                    )
+
+                    async_steering_box.submit(
+                        fn=inject_async,
+                        inputs=[async_steering_box, agent_selector, session_name, chatbot],
+                        outputs=[async_steering_box, active_stack_out, chatbot],
+                        queue=False
                     )
 
             demo.load(None)

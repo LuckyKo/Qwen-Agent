@@ -248,6 +248,22 @@ if __name__ == '__main__':
     # Users can also switch between agents via the dropdown
     print("\n[OK] Orchestrator ready! Launching WebUI...")
     print("Open your browser to http://127.0.0.1:7860")
+    
+    # Set up background thread for async terminal messages
+    import threading
+    import sys
+    def async_input_listener():
+        while True:
+            try:
+                msg = sys.stdin.readline().strip()
+                if msg:
+                    agent_pool.async_message_queue.append(msg)
+                    print(f"\n[QUEUED] '{msg}' will be injected to the active agent on its next turn.")
+            except Exception:
+                break
+    threading.Thread(target=async_input_listener, daemon=True).start()
+    
+    print("\n[TIP] You can type messages in this terminal at ANY TIME to seamlessly inject them into the active agent's thought process without clicking Stop in the WebUI!")
     print("=" * 50)
 
     WebUI(all_agents, chatbot_config=chatbot_config).run()
