@@ -154,10 +154,13 @@ def convert_fncall_to_text(messages: List[Dict]) -> List[Dict]:
                 f_name = fn_call['name']
                 # Try to parse and format gracefully
                 f_args_raw = fn_call['arguments']
-                try:
-                    f_args = json.dumps(json.loads(f_args_raw), indent=2, ensure_ascii=False)
-                except:
+                if len(f_args_raw) > 10000: # Skip pretty-printing for very large payloads
                     f_args = f_args_raw
+                else:
+                    try:
+                        f_args = json.dumps(json.loads(f_args_raw), indent=2, ensure_ascii=False)
+                    except:
+                        f_args = f_args_raw
                 
                 # Keep open if it's the last message OR if the next message isn't a FUNCTION result yet
                 next_msg = messages[i + 1] if i + 1 < len(messages) else None

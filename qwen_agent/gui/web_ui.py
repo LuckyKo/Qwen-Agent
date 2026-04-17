@@ -464,13 +464,18 @@ class WebUI:
         return tabs, tabs_container, chatbots, statuses, remaining
 
     def _sanitize_content(self, text: str) -> str:
-        """Prevent Gradio crash by disabling links to local directories."""
+        """Prevent Gradio crash by disabling links to local directories with memoization."""
         if not text or not isinstance(text, str):
             return text
             
+        # Fast path 1: Check if this exact string is already sanitized
         if text in self._sanitized_cache:
             return self._sanitized_cache[text]
             
+        # Fast path 2: If there are no absolute paths or file links, skip regex processing
+        if ':' not in text and '/' not in text:
+            return text
+
         def is_dir(path):
             try:
                 # Remove common local prefixes
@@ -482,7 +487,10 @@ class WebUI:
                 if os.name == 'nt' and clean_path.startswith('/') and len(clean_path) > 2 and clean_path[2] == ':':
                     clean_path = clean_path[1:]
 
-                return os.path.isdir(clean_path)
+                # Only call isdir if it's an absolute path
+                if not os.path.isabs(clean_path):
+                    return False
+                return os.path.exists(clean_path) and os.path.isdir(clean_path)
             except:
                 return False
 
@@ -497,10 +505,9 @@ class WebUI:
         # Regex for markdown links: [label](path)
         processed = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_dir_link, text)
         
-        # 2. Handle raw absolute paths that might be auto-linkified by ModelScope
+        # 2. Handle raw absolute paths
         def replace_raw_dir(match):
             path = match.group(0)
-            # Basic punctuation cleanup (don't include trailing dots/commas in the path check)
             punct = ""
             while path and path[-1] in '.,;:!?)]':
                 punct = path[-1] + punct
@@ -510,12 +517,11 @@ class WebUI:
                 return f"`{path}`{punct}"
             return match.group(0)
 
-        # Regex for Windows paths (C:\...) or Unix-style absolute paths ( /... )
         raw_path_pattern = r'(?:[a-zA-Z]:\\[^\s"\'<>|]+|/(?:[^/\s"\'<>|]+/)+[^\s"\'<>|]*)'
         sanitized = re.sub(raw_path_pattern, replace_raw_dir, processed)
         
         # Cache management: avoid memory leaks if cache grows too large
-        if len(self._sanitized_cache) > 1000:
+        if len(self._sanitized_cache) > 2000: # Larger cache limit
             self._sanitized_cache.clear()
         self._sanitized_cache[text] = sanitized
         
@@ -753,10 +759,20 @@ class WebUI:
         elif hasattr(agent_runner, 'name'):
             main_label += f" ({agent_runner.name})"
 
-        # Initial yield to clear and update
+        # Initial yield to clear and update. 
+        # Using shallow copy for the main list and deepcopy ONLY for the active bubble(s) that might be mutated.
         def get_all_outputs():
+            # Optimization: avoid expensive deepcopy on the entire chatbot history.
+            # Gradio's mgr.Chatbot generally expects a value that it doesn't mutate, or it handles it.
+            # However, we often mutate the *last* bubble in _chatbot during streaming.
+            
+            _chatbot_val = list(_chatbot) # Shallow copy of the list
+            if _chatbot_val:
+                # Deepcopy the last bubble since it's most likely being mutated during streaming
+                _chatbot_val[-1] = copy.deepcopy(_chatbot_val[-1])
+            
             res = [
-                gr.update(value=copy.deepcopy(_chatbot), label=main_label), 
+                gr.update(value=_chatbot_val, label=main_label), 
                 _history,
                 _agent_selector,
                 _slot_map,
@@ -854,36 +870,54 @@ class WebUI:
                                 _last_stack_top = current_top
                                 tabs_container = gr.update(selected=f"sub_tab_{active_slot_idx}")
 
-                            # Update the slot's content
+                            # Update the slot's content with memoization
                             sa_state = _agent_pool.sub_agent_state[current_top]
-                            if self.verbose: logger.info(f"[DEBUG] Sub-agent {current_top} state: active={sa_state.get('active')}, msg_count={len(sa_state.get('messages', []))}")
-                            sub_statuses[active_slot_idx] = f"{current_top} is responding..." if sa_state.get('active') else "Finished"
+                            messages = sa_state.get('messages', [])
                             
-                            messages = copy.deepcopy(sa_state.get('messages', []))
-                            new_val = []
-                            if messages:
-                                formatted = convert_fncall_to_text(messages)
-                                pair = [None, None]
-                                for msg in formatted:
-                                    role, content = msg.get('role'), msg.get('content')
-                                    if role == USER:
-                                        if pair[0] is not None: new_val.append(list(pair))
-                                        pair = [content, None]
-                                    elif role == ASSISTANT:
-                                        pair[1] = content
-                                        new_val.append(list(pair))
-                                        pair = [None, None]
-                                if pair[0] or pair[1]: new_val.append(list(pair))
+                            # Generate a unique key for this history state to avoid redundant formatting
+                            last_msg = messages[-1] if messages else None
+                            msg_key = (
+                                len(messages), 
+                                id(last_msg), # id() is somewhat stable for long-lived objects in list
+                                last_msg.get(CONTENT) if isinstance(last_msg, dict) else getattr(last_msg, CONTENT, None) if last_msg else None,
+                                last_msg.get('function_call') if isinstance(last_msg, dict) else getattr(last_msg, 'function_call', None) if last_msg else None
+                            )
                             
-                            # Sanitize
-                            for bubble in new_val:
-                                if bubble[0]: bubble[0] = self._sanitize_content(bubble[0])
-                                if bubble[1]: bubble[1] = self._sanitize_content(bubble[1])
-                            
-                            if sub_chatbots[active_slot_idx] != new_val:
-                                if self.verbose: logger.info(f"[DEBUG] Sub-agent {current_top} content changed. new_val len: {len(new_val)}")
-                                sub_chatbots[active_slot_idx] = new_val
-                                sub_changed = True
+                            # Check cache for this slot
+                            cached_key = getattr(self, f"_last_msg_key_{active_slot_idx}", None)
+                            if cached_key != msg_key:
+                                setattr(self, f"_last_msg_key_{active_slot_idx}", msg_key)
+                                
+                                if self.verbose: logger.info(f"[DEBUG] Sub-agent {current_top} state: active={sa_state.get('active')}, msg_count={len(messages)}")
+                                sub_statuses[active_slot_idx] = f"{current_top} is responding..." if sa_state.get('active') else "Finished"
+                                
+                                # Process history into chatbot bubbles (incremental logic possible here but even this memoization helps)
+                                # Deepcopy here is fine because it's only one sub-agent's local history, usually much smaller than main
+                                messages_copy = copy.deepcopy(messages)
+                                new_val = []
+                                if messages_copy:
+                                    formatted = convert_fncall_to_text(messages_copy)
+                                    pair = [None, None]
+                                    for msg in formatted:
+                                        role, content = msg.get('role'), msg.get('content')
+                                        if role == USER:
+                                            if pair[0] is not None: new_val.append(list(pair))
+                                            pair = [content, None]
+                                        elif role == ASSISTANT:
+                                            pair[1] = content
+                                            new_val.append(list(pair))
+                                            pair = [None, None]
+                                    if pair[0] or pair[1]: new_val.append(list(pair))
+                                
+                                # Sanitize ONLY the bubbles that changed or were added would be better, 
+                                # but _sanitize_content is now MUCH faster due to its own cache.
+                                for bubble in new_val:
+                                    if bubble[0]: bubble[0] = self._sanitize_content(bubble[0])
+                                    if bubble[1]: bubble[1] = self._sanitize_content(bubble[1])
+                                
+                                if sub_chatbots[active_slot_idx] != new_val:
+                                    sub_chatbots[active_slot_idx] = new_val
+                                    sub_changed = True
                     else:
                         _last_stack_top = None
 
