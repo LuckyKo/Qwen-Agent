@@ -67,7 +67,7 @@ class TextChatAtOAI(BaseFnCallModel):
 
             def _chat_complete_create(*args, **kwargs):
                 # OpenAI API v1 does not allow the following args, must pass by extra_body
-                extra_params = ['top_k', 'repetition_penalty']
+                extra_params = ['top_k', 'repetition_penalty', 'repeat_penalty', 'repeatPenalty', 'min_p']
                 if any((k in kwargs) for k in extra_params):
                     kwargs['extra_body'] = copy.deepcopy(kwargs.get('extra_body', {}))
                     for k in extra_params:
@@ -76,12 +76,18 @@ class TextChatAtOAI(BaseFnCallModel):
                 if 'request_timeout' in kwargs:
                     kwargs['timeout'] = kwargs.pop('request_timeout')
 
-                client = openai.OpenAI(**api_kwargs)
+                local_api_kwargs = dict(api_kwargs)
+                if 'api_base' in kwargs:
+                    local_api_kwargs['base_url'] = kwargs.pop('api_base')
+                if 'api_key' in kwargs:
+                    local_api_kwargs['api_key'] = kwargs.pop('api_key')
+
+                client = openai.OpenAI(**local_api_kwargs)
                 return client.chat.completions.create(*args, **kwargs)
 
             def _complete_create(*args, **kwargs):
                 # OpenAI API v1 does not allow the following args, must pass by extra_body
-                extra_params = ['top_k', 'repetition_penalty']
+                extra_params = ['top_k', 'repetition_penalty', 'repeat_penalty', 'repeatPenalty', 'min_p']
                 if any((k in kwargs) for k in extra_params):
                     kwargs['extra_body'] = copy.deepcopy(kwargs.get('extra_body', {}))
                     for k in extra_params:
@@ -90,7 +96,13 @@ class TextChatAtOAI(BaseFnCallModel):
                 if 'request_timeout' in kwargs:
                     kwargs['timeout'] = kwargs.pop('request_timeout')
 
-                client = openai.OpenAI(**api_kwargs)
+                local_api_kwargs = dict(api_kwargs)
+                if 'api_base' in kwargs:
+                    local_api_kwargs['base_url'] = kwargs.pop('api_base')
+                if 'api_key' in kwargs:
+                    local_api_kwargs['api_key'] = kwargs.pop('api_key')
+
+                client = openai.OpenAI(**local_api_kwargs)
                 return client.completions.create(*args, **kwargs)
 
             self._complete_create = _complete_create
@@ -165,8 +177,9 @@ class TextChatAtOAI(BaseFnCallModel):
     ) -> Iterator[List[Message]]:
         messages = self.convert_messages_to_dicts(messages)
         logger.debug(f'LLM Input generate_cfg: \n{generate_cfg}')
+        local_model = generate_cfg.pop('model', self.model)
         try:
-            response = self._chat_complete_create(model=self.model, messages=messages, stream=True, **generate_cfg)
+            response = self._chat_complete_create(model=local_model, messages=messages, stream=True, **generate_cfg)
             if delta_stream:
                 for chunk in response:
                     if chunk.choices:
@@ -226,8 +239,9 @@ class TextChatAtOAI(BaseFnCallModel):
         generate_cfg: dict,
     ) -> List[Message]:
         messages = self.convert_messages_to_dicts(messages)
+        local_model = generate_cfg.pop('model', self.model)
         try:
-            response = self._chat_complete_create(model=self.model, messages=messages, stream=False, **generate_cfg)
+            response = self._chat_complete_create(model=local_model, messages=messages, stream=False, **generate_cfg)
             if hasattr(response.choices[0].message, 'reasoning_content'):
                 return [
                     Message(role=ASSISTANT,
