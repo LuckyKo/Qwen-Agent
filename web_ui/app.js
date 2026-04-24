@@ -1187,13 +1187,13 @@ document.querySelectorAll('.settings-tab').forEach(btn => {
 
 function updateControls() {
   if (state.generating) {
-    sendBtn.disabled = true;
-    sendBtn.classList.add('loading');
+    sendBtn.classList.add('inject-mode');
+    sendBtn.title = 'Inject message into active agent (Enter)';
     resetBtn.disabled = true;
     document.body.classList.add('is-generating');
   } else {
-    sendBtn.disabled = false;
-    sendBtn.classList.remove('loading');
+    sendBtn.classList.remove('inject-mode');
+    sendBtn.title = 'Send (Enter)';
     resetBtn.disabled = false;
     document.body.classList.remove('is-generating');
   }
@@ -1202,6 +1202,9 @@ function updateControls() {
   retryBtn.disabled = state.generating || state.messages.length === 0;
 
   statusText.textContent = state.generating ? 'Generating...' : '';
+  chatInput.placeholder = state.generating
+    ? 'Inject a message into the active agent...'
+    : 'Send a message...';
 }
 
 // ── Auto-resize textarea ─────────────────────────────────────────────────────
@@ -1401,6 +1404,20 @@ function sendMessage() {
   const text = formatMultimodalContent(rawText);
   chatInput.value = '';
   autoResize(chatInput);
+
+  if (state.generating) {
+    // Async injection: message will be injected into the running agent
+    send({ type: 'message', text });
+    // Visual feedback
+    const prev = statusText.textContent;
+    statusText.textContent = '⚡ Message injected';
+    statusText.style.color = 'var(--accent)';
+    setTimeout(() => {
+      statusText.textContent = prev;
+      statusText.style.color = '';
+    }, 1500);
+    return;
+  }
 
   send({
     type: 'message',

@@ -75,15 +75,22 @@ class CompressContext(BaseTool):
             from qwen_agent.utils.utils import extract_text_from_message
             responses = list(llm.chat([Message(role=USER, content=summary_prompt)]))
             if responses and responses[-1]:
-                # Extract robustly regardless of content format
-                summary = extract_text_from_message(responses[-1][0], add_upload_info=False)
+                # The LLM output could be split across multiple message objects in the final yield
+                # (e.g., DeepSeek / OAI client yields one for reasoning, one for content)
+                summary_parts = []
+                for msg_obj in responses[-1]:
+                    part = extract_text_from_message(msg_obj, add_upload_info=False)
+                    if part.strip():
+                        summary_parts.append(part.strip())
+                summary = "\n\n".join(summary_parts)
                 
                 # Fallback: If content is empty but the model provided reasoning_content, use that
                 if not summary.strip():
-                    msg_obj = responses[-1][0]
-                    reasoning = msg_obj.get('reasoning_content', '') if isinstance(msg_obj, dict) else getattr(msg_obj, 'reasoning_content', '')
-                    if reasoning:
-                        summary = reasoning
+                    for msg_obj in responses[-1]:
+                        reasoning = msg_obj.get('reasoning_content', '') if isinstance(msg_obj, dict) else getattr(msg_obj, 'reasoning_content', '')
+                        if reasoning.strip():
+                            summary = reasoning.strip()
+                            break
                         
                 # Cleanup common LM Studio meta-commentary
                 import re
