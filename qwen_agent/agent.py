@@ -175,6 +175,21 @@ class Agent(ABC):
                                  new_generate_cfg=extra_generate_cfg,
                              ))
 
+    def _get_active_functions(self) -> list:
+        """Return function schemas for tools not disabled by the current config.
+        
+        This is the single source of truth for tool filtering. All agent
+        subclasses should call this instead of manually reading disabled_tools.
+        """
+        disabled_map = getattr(self.llm, 'generate_cfg', {}).get('disabled_tools', {})
+        disabled = set(disabled_map.get(self.name, []))
+        return [func.function for name, func in self.function_map.items() if name not in disabled]
+
+    def _get_disabled_tool_names(self) -> set:
+        """Return the set of currently disabled tool names for this agent."""
+        disabled_map = getattr(self.llm, 'generate_cfg', {}).get('disabled_tools', {})
+        return set(disabled_map.get(self.name, []))
+
     def _call_tool(self, tool_name: str, tool_args: Union[str, dict] = '{}', **kwargs) -> Union[str, List[ContentItem]]:
         """The interface of calling tools for the agent.
 

@@ -71,8 +71,7 @@ class ReActChat(FnCallAgent):
         )
 
     def _run(self, messages: List[Message], lang: Literal['en', 'zh'] = 'en', **kwargs) -> Iterator[List[Message]]:
-        disabled_tools_map = getattr(self.llm, 'generate_cfg', {}).get('disabled_tools', {})
-        disabled_tools = disabled_tools_map.get(self.name, [])
+        disabled_tools = self._get_disabled_tool_names()
         text_messages = self._prepend_react_prompt(messages, lang=lang, disabled_tools=disabled_tools)
 
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN

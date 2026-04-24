@@ -9,6 +9,7 @@ Read operations (read_file, list_dir, grep, view_image) are free access.
 """
 
 import json
+import os
 import re
 import uuid
 import threading

@@ -53,9 +53,7 @@ class VirtualMemoryAgent(Assistant):
         while True and num_llm_calls_available > 0:
             num_llm_calls_available -= 1
             
-            disabled_tools_map = getattr(self.llm, 'generate_cfg', {}).get('disabled_tools', {})
-            disabled_tools = disabled_tools_map.get(self.name, [])
-            active_functions = [func.function for name, func in self.function_map.items() if name not in disabled_tools]
+            active_functions = self._get_active_functions()
 
             output_stream = self._call_llm(messages=self._format_file(messages) + response,
                                            functions=active_functions)

@@ -35,44 +35,7 @@ class CompressContext(BaseTool):
         self.agent_pool = agent_pool
         self.agent_name = agent_name
     
-    def call(self, params: str, **kwargs) -> str:
-        params = self._verify_json_format_args(params)
-        fraction = min(params.get('fraction', 0.2), 0.8)
-        justification = params.get('justification', 'Context management')
-        
-        if not self.agent_pool:
-            return "ERROR: agent_pool not connected to tool"
-            
-        # Prioritize instance name passed via kwargs (from Agent._call_tool)
-        agent_name = kwargs.get('agent_instance_name') or self.agent_name or 'orchestrator'
-        
-        # Use current messages from kwargs if available to catch the very latest context,
-        # otherwise fallback to the persistent pool.
-        history = kwargs.get('messages')
-        if not history:
-            history = self.agent_pool.get_conversation(agent_name)
-        
-        if not history:
-            return "ERROR: No conversation history to compress."
-            
-        # Handle both dicts (from pool) and Message objects (from kwargs)
-        start_idx = 0
-        first_msg = history[0]
-        first_role = first_msg.get('role') if isinstance(first_msg, dict) else getattr(first_msg, 'role', '')
-        
-        if first_role == SYSTEM:
-            start_idx = 1
-            
-        messages_to_compress = history[start_idx:]
-        
-        if len(messages_to_compress) < 3:
-            return "ERROR: Conversation history too short to safely compress (need at least 3 messages)."
-            
-        # Ensure we compress at least 1 message if possible, ignoring strict fractions for short arrays
-        num_to_summarize = max(1, int(len(messages_to_compress) * fraction))
-            
-        target_messages = messages_to_compress[:num_to_summarize]
-        
+    
     def _generate_summary(self, target_messages: List[Union[dict, Message]]) -> str:
         """Internal helper to generate a summary for a list of messages."""
         # Format the messages for the summary prompt
