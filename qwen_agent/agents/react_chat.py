@@ -71,7 +71,9 @@ class ReActChat(FnCallAgent):
         )
 
     def _run(self, messages: List[Message], lang: Literal['en', 'zh'] = 'en', **kwargs) -> Iterator[List[Message]]:
-        text_messages = self._prepend_react_prompt(messages, lang=lang)
+        disabled_tools_map = getattr(self.llm, 'generate_cfg', {}).get('disabled_tools', {})
+        disabled_tools = disabled_tools_map.get(self.name, [])
+        text_messages = self._prepend_react_prompt(messages, lang=lang, disabled_tools=disabled_tools)
 
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         response: str = 'Thought: '
@@ -106,9 +108,11 @@ class ReActChat(FnCallAgent):
                 action_input = '\n' + action_input
             text_messages[-1].content += thought + f'\nAction: {action}\nAction Input: {action_input}' + observation
 
-    def _prepend_react_prompt(self, messages: List[Message], lang: Literal['en', 'zh']) -> List[Message]:
+    def _prepend_react_prompt(self, messages: List[Message], lang: Literal['en', 'zh'], disabled_tools: List[str] = None) -> List[Message]:
+        disabled_tools = disabled_tools or []
         tool_descs = []
-        for f in self.function_map.values():
+        active_tools = [tool for name, tool in self.function_map.items() if name not in disabled_tools]
+        for f in active_tools:
             function = f.function
             name = function.get('name', None)
             name_for_human = function.get('name_for_human', name)
@@ -122,7 +126,7 @@ class ReActChat(FnCallAgent):
                                  parameters=json.dumps(function['parameters'], ensure_ascii=False),
                                  args_format=args_format).rstrip())
         tool_descs = '\n\n'.join(tool_descs)
-        tool_names = ','.join(tool.name for tool in self.function_map.values())
+        tool_names = ','.join(tool.name for tool in active_tools)
         text_messages = [format_as_text_message(m, add_upload_info=True, lang=lang) for m in messages]
         text_messages[-1].content = PROMPT_REACT.format(
             tool_descs=tool_descs,

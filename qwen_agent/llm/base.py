@@ -222,6 +222,10 @@ class BaseChatModel(ABC):
         if not self.support_multimodal_input:
             messages = [format_as_text_message(msg, add_upload_info=False) for msg in messages]
 
+        # Remove Qwen-Agent specific keys that LLM SDKs (like OpenAI) don't accept
+        if 'disabled_tools' in generate_cfg:
+            del generate_cfg['disabled_tools']
+
         if self.use_raw_api:
             logger.debug('`use_raw_api` takes effect.')
             assert stream and (not delta_stream), '`use_raw_api` only support full stream!!!'
@@ -632,7 +636,16 @@ def _truncate_input_messages_roughly(messages: List[Message], max_tokens: int) -
     def _count_tokens(msg: Message) -> int:
         if msg.role == ASSISTANT and msg.function_call:
             return tokenizer.count_tokens(f'{msg.function_call}')
-        return tokenizer.count_tokens(extract_text_from_message(msg, add_upload_info=True))
+        
+        text = extract_text_from_message(msg, add_upload_info=True)
+        import re
+        image_tokens = 0
+        def repl(match):
+            nonlocal image_tokens
+            image_tokens += 255
+            return f"[Image: {match.group(1)}]"
+        text = re.sub(r'!\[(.*?)\]\(data:image/[^;]+;base64,[a-zA-Z0-9+/=]+\)', repl, text)
+        return tokenizer.count_tokens(text) + image_tokens
 
     def _truncate_message(msg: Message, max_tokens: int, keep_both_sides: bool = False):
         if isinstance(msg.content, str):

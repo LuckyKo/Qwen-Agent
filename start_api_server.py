@@ -113,83 +113,51 @@ def initialize_agents():
 
     agent_pool = AgentPool(llm_cfg, 'agents')
 
+    # Instantiate heavy tools ONCE to share across all agents and prevent OOM
+    shared_tools = {}
+    shared_tools['ddg_search'] = DDGSearch()
+    try:
+        shared_tools['image_gen'] = image_gen.ImageGen(llm_cfg=llm_cfg)
+    except Exception:
+        pass
+    shared_tools['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': 'workspace'})
+    shared_tools['storage'] = storage.Storage()
+    
+    from qwen_agent.tools import retrieval
+    shared_tools['retrieval'] = retrieval.Retrieval(cfg={'work_dir': 'workspace'})
+    shared_tools['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': 'workspace'})
+    shared_tools['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': 'workspace'})
+    shared_tools['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
+    
+    try:
+        shared_tools['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': 'workspace'})
+    except Exception:
+        pass
+        
+    try:
+        from qwen_agent.tools import python_executor
+        shared_tools['python_executor'] = python_executor.PythonExecutor(cfg={'work_dir': 'workspace'})
+    except Exception:
+        pass
+
     # Add tools to all agents based on their role
     for agent_name in agent_pool.list_agents():
         agent = agent_pool.get_agent(agent_name)
         if agent:
             default_tools = DEFAULT_TOOLS.get(agent_name, DEFAULT_TOOLS['writer'])
-
-            agent.function_map['ddg_search'] = DDGSearch()
-
-            if 'image_gen' in default_tools:
-                try:
-                    agent.function_map['image_gen'] = image_gen.ImageGen(llm_cfg=llm_cfg)
-                except Exception:
-                    pass
-
-            if 'web_extractor' in default_tools:
-                agent.function_map['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': 'workspace'})
-
-            if 'storage' in default_tools:
-                agent.function_map['storage'] = storage.Storage()
-
-            if 'retrieval' in default_tools:
-                from qwen_agent.tools import retrieval
-                agent.function_map['retrieval'] = retrieval.Retrieval(cfg={'work_dir': 'workspace'})
-
-            if 'simple_doc_parser' in default_tools:
-                agent.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': 'workspace'})
-
-            if 'doc_parser' in default_tools:
-                agent.function_map['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': 'workspace'})
-
-            if 'extract_doc_vocabulary' in default_tools:
-                agent.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
-
-            if 'code_interpreter' in default_tools:
-                try:
-                    agent.function_map['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': 'workspace'})
-                except Exception:
-                    pass
-
-            if 'python_executor' in default_tools:
-                try:
-                    from qwen_agent.tools import python_executor
-                    agent.function_map['python_executor'] = python_executor.PythonExecutor(cfg={'work_dir': 'workspace'})
-                except Exception:
-                    pass
+            agent.default_tools = default_tools
+            
+            for tool_name, tool_inst in shared_tools.items():
+                agent.function_map[tool_name] = tool_inst
 
     # Load orchestrator
     orchestrator = load_orchestrator_agent(agent_pool, llm_cfg)
 
-    orchestrator.function_map['ddg_search'] = DDGSearch()
-
     default_orch_tools = DEFAULT_TOOLS['orchestrator']
-    if 'web_extractor' in default_orch_tools:
-        orchestrator.function_map['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': 'workspace'})
-    if 'storage' in default_orch_tools:
-        orchestrator.function_map['storage'] = storage.Storage()
-    if 'retrieval' in default_orch_tools:
-        from qwen_agent.tools import retrieval
-        orchestrator.function_map['retrieval'] = retrieval.Retrieval(cfg={'work_dir': 'workspace'})
-
-    if 'simple_doc_parser' in default_orch_tools:
-        orchestrator.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': 'workspace'})
-    if 'doc_parser' in default_orch_tools:
-        orchestrator.function_map['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': 'workspace'})
-    if 'extract_doc_vocabulary' in default_orch_tools:
-        orchestrator.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
-    if 'code_interpreter' in default_orch_tools:
-        try:
-            orchestrator.function_map['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': 'workspace'})
-        except Exception:
-            pass
-    if 'python_executor' in default_orch_tools:
-        try:
-            from qwen_agent.tools import python_executor
-            orchestrator.function_map['python_executor'] = python_executor.PythonExecutor(cfg={'work_dir': 'workspace'})
-        except Exception:
-            pass
+    orchestrator.default_tools = default_orch_tools
+    
+    for tool_name, tool_inst in shared_tools.items():
+        orchestrator.function_map[tool_name] = tool_inst
 
     all_agents = [orchestrator]
     for agent_name in agent_pool.list_agents():

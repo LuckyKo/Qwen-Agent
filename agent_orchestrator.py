@@ -882,7 +882,11 @@ class OrchestratorAgent(Assistant):
                         
                         res_append += "\nEnabled Tools (can change per interaction):\n"
                         if self.function_map:
+                            disabled_tools_map = getattr(self.llm, 'generate_cfg', {}).get('disabled_tools', {})
+                            disabled_tools = disabled_tools_map.get(self.name, [])
                             for t_name in sorted(self.function_map.keys()):
+                                if t_name in disabled_tools:
+                                    continue
                                 desc = getattr(self.function_map[t_name], 'description', 'No description provided')
                                 res_append += f"- **{t_name}**: {desc}\n"
                         else: res_append += "- None currently enabled.\n"
@@ -1017,9 +1021,13 @@ class OrchestratorAgent(Assistant):
             # msg_roles = [m.role for m in llm_messages]
             # logger.info(f"LLM Call Order: {msg_roles}")
     
+            disabled_tools_map = getattr(self.llm, 'generate_cfg', {}).get('disabled_tools', {})
+            disabled_tools = disabled_tools_map.get(self.name, [])
+            active_functions = [func.function for name, func in self.function_map.items() if name not in disabled_tools]
+            
             output_stream = self._call_llm(
                 messages=llm_messages,
-                functions=[func.function for func in self.function_map.values()],
+                functions=active_functions,
                 extra_generate_cfg=extra_generate_cfg,
             )
     

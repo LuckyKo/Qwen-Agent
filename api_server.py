@@ -29,9 +29,11 @@ import asyncio
 import copy
 import json
 import os
+import re
 import threading
 import time
 import traceback
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from qwen_agent.llm.schema import (
@@ -44,6 +46,32 @@ try:
     from qwen_agent.agents.user_agent import PENDING_USER_INPUT
 except ImportError:
     PENDING_USER_INPUT = 'PENDING_USER_INPUT'
+
+
+def _parse_multimodal_content(text):
+    """
+    Parse markdown images ![alt](data:...) and return a list of content items.
+    If no images are found, returns the original text.
+    """
+    pattern = r'!\[([^\]]*)\]\((data:image/[^;]+;base64,[a-zA-Z0-9+/=]+)\)'
+    parts = []
+    last_end = 0
+    for match in re.finditer(pattern, text):
+        start, end = match.span()
+        if start > last_end:
+            parts.append({'text': text[last_end:start]})
+        alt, url = match.groups()
+        parts.append({'image': url})
+        last_end = end
+    
+    if last_end < len(text):
+        parts.append({'text': text[last_end:]})
+    
+    if not parts:
+        return text
+    if len(parts) == 1 and 'text' in parts[0]:
+        return parts[0]['text']
+    return parts
 
 
 # ─── Message serialization ────────────────────────────────────────────────────
@@ -192,7 +220,9 @@ def create_app(agents, agent_pool, config=None):
             'agent_index': session['agent_index'],
             'agents': [
                 {'name': getattr(a, 'name', f'Agent-{i}'), 'index': i,
-                 'description': getattr(a, 'description', '')}
+                 'description': getattr(a, 'description', ''),
+                 'tools': list(a.function_map.keys()) if hasattr(a, 'function_map') else [],
+                 'default_tools': getattr(a, 'default_tools', list(a.function_map.keys()) if hasattr(a, 'function_map') else [])}
                 for i, a in enumerate(agents)
             ],
         }
@@ -384,6 +414,42 @@ def create_app(agents, agent_pool, config=None):
             return {"status": "ok", "result": result}
         return {"status": "error", "message": "No operation manager"}
 
+    @app.get("/api/sessions")
+    async def api_list_sessions():
+        from pathlib import Path
+        log_dir = Path('workspace/logs')
+        if not log_dir.exists():
+            return {"sessions": []}
+        
+        sessions = []
+        for p in log_dir.glob('*.jsonl'):
+            try:
+                # Basic info from filename: agent_class_instance_name_timestamp.jsonl
+                parts = p.stem.split('_')
+                if len(parts) >= 3:
+                    agent_class = parts[0]
+                    timestamp = parts[-2] + "_" + parts[-1]
+                    instance_name = "_".join(parts[1:-2])
+                else:
+                    agent_class = "Unknown"
+                    instance_name = p.stem
+                    timestamp = "Unknown"
+                
+                sessions.append({
+                    "path": str(p),
+                    "name": instance_name,
+                    "agent": agent_class,
+                    "timestamp": timestamp,
+                    "size": p.stat().st_size,
+                    "mtime": p.stat().st_mtime
+                })
+            except Exception:
+                continue
+        
+        # Sort by mtime descending
+        sessions.sort(key=lambda x: x['mtime'], reverse=True)
+        return {"sessions": sessions}
+
     # ── WebSocket ─────────────────────────────────────────────────────────
 
     @app.websocket("/ws/chat")
@@ -429,8 +495,9 @@ def create_app(agents, agent_pool, config=None):
                     if 'generate_cfg' in data:
                         session['generate_cfg'] = data['generate_cfg']
 
-                    # Add user message to history
-                    session['history'].append({ROLE: USER, CONTENT: text})
+                    # Add user message to history (parsed for multimodal items)
+                    parsed_content = _parse_multimodal_content(text)
+                    session['history'].append({ROLE: USER, CONTENT: parsed_content})
 
                     # Start agent generation
                     session['generation_id'] += 1
@@ -511,7 +578,7 @@ def create_app(agents, agent_pool, config=None):
                             and 0 <= idx < len(session['history'])):
                         msg = session['history'][idx]
                         if isinstance(msg, dict):
-                            msg[CONTENT] = content
+                            msg[CONTENT] = _parse_multimodal_content(content)
                     await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'delete_messages':
@@ -529,6 +596,19 @@ def create_app(agents, agent_pool, config=None):
 
                 elif msg_type == 'set_session_name':
                     session['session_name'] = data.get('name', 'Maine')
+
+                elif msg_type == 'load_session':
+                    path = data.get('path')
+                    if path and agent_pool:
+                        status = agent_pool.load_session_from_log(path, target_instance=session.get('session_name'))
+                        if status.startswith("Error"):
+                            await websocket.send_text(json.dumps({"type": "error", "message": status}, ensure_ascii=False))
+                        else:
+                            # Successfully loaded. Update history in session
+                            instance_name = session.get('session_name', 'Maine')
+                            if instance_name in agent_pool.instance_conversations:
+                                session['history'] = copy.deepcopy(agent_pool.instance_conversations[instance_name])
+                                await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'inject':
                     text = data.get('text', '').strip()

@@ -50,14 +50,15 @@ const sessionNameInput = $('#sessionName');
 const statusText = $('#statusText');
 const connectionDot = $('#connectionDot');
 const approvalBar = $('#approvalBar');
-const subAgentsSection = $('#subAgentsSection');
-const subAgentTabs = $('#subAgentTabs');
-const subAgentContent = $('#subAgentContent');
+const mainTabBar = $('#mainTabBar');
+const mainTabChat = $('#mainTabChat');
+const mainTabPanels = document.querySelector('.main-tab-panels');
 
 // New CWrite-style DOM refs
 const btnToggleSettings = $('#btn-toggle-settings');
-const panelSettings = $('#panel-settings');
+const sidePanel = $('#side-panel');
 const statusWords = $('#status-words');
+const statusTokens = $('#status-tokens');
 const statusTokensSec = $('#status-tokens-sec');
 const statusGenInfo = $('#status-gen-info');
 const settingFontSize = $('#setting-font-size');
@@ -67,6 +68,13 @@ const settingLinesEnabled = $('#setting-lines-enabled');
 const settingUserColor = $('#setting-user-color');
 const settingAssistantColor = $('#setting-assistant-color');
 const settingRawEditColor = $('#setting-raw-edit-color');
+const settingTruncateTools = $('#setting-truncate-tools');
+
+const settingVisionEnabled = $('#setting-vision-enabled');
+const settingImageDetail = $('#setting-image-detail');
+const settingMaxImageSize = $('#setting-max-image-size');
+const insertImageBtn = $('#insertImageBtn');
+const imageInput = $('#imageInput');
 
 // Range outputs
 const ranges = [
@@ -81,11 +89,112 @@ const ranges = [
 
 // ── Initialization ───────────────────────────────────────────────────────────
 
-// Settings panel toggle
-if (btnToggleSettings && panelSettings) {
+// Side panel toggle
+if (btnToggleSettings && sidePanel) {
   btnToggleSettings.addEventListener('click', () => {
-    panelSettings.classList.toggle('collapsed');
+    sidePanel.classList.toggle('collapsed');
   });
+}
+
+// Sidebar toggle (Left)
+const btnToggleSidebar = $('#btn-toggle-sidebar');
+const appSidebar = $('#app-sidebar');
+if (btnToggleSidebar && appSidebar) {
+  btnToggleSidebar.addEventListener('click', () => {
+    appSidebar.classList.toggle('collapsed');
+  });
+}
+
+// Session Manager DOM refs
+const refreshSessionsBtn = $('#refreshSessionsBtn');
+const sessionSearch = $('#sessionSearch');
+const sessionsList = $('#sessionsList');
+
+// State for sessions
+let sessions = [];
+
+// Fetch sessions from API
+async function fetchSessions() {
+  try {
+    if (sessionsList) sessionsList.innerHTML = '<div class="sessions-loading">Loading...</div>';
+    const res = await fetch('/api/sessions');
+    const data = await res.json();
+    sessions = data.sessions || [];
+    renderSessions();
+  } catch (err) {
+    console.error('Failed to fetch sessions:', err);
+    if (sessionsList) sessionsList.innerHTML = '<div class="sessions-placeholder">Error loading sessions.</div>';
+  }
+}
+
+// Initial fetch
+fetchSessions();
+
+
+// Render session list
+function renderSessions() {
+  if (!sessionsList) return;
+  const query = sessionSearch ? sessionSearch.value.toLowerCase() : '';
+  const filtered = sessions.filter(s => 
+    s.name.toLowerCase().includes(query) || 
+    s.agent.toLowerCase().includes(query)
+  );
+
+  if (filtered.length === 0) {
+    sessionsList.innerHTML = `<div class="sessions-placeholder">${query ? 'No matching sessions.' : 'No sessions found.'}</div>`;
+    return;
+  }
+
+  sessionsList.innerHTML = filtered.map(s => `
+    <div class="session-item" data-path="${s.path.replace(/\\/g, '/')}">
+      <div class="session-item-header">
+        <span class="session-item-name">${s.name}</span>
+        <span class="session-item-agent">${s.agent}</span>
+      </div>
+      <div class="session-item-meta">
+        <span>${formatDate(s.mtime * 1000)}</span>
+        <span>${formatSize(s.size)}</span>
+      </div>
+    </div>
+  `).join('');
+
+  // Add click listeners to session items
+  document.querySelectorAll('.session-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const path = item.dataset.path;
+      loadSession(path);
+    });
+  });
+}
+
+function loadSession(path) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    if (confirm('Load this session? Current unsaved state will be lost.')) {
+      ws.send(JSON.stringify({
+        type: 'load_session',
+        path: path
+      }));
+    }
+  }
+}
+
+function formatDate(timestamp) {
+  const date = new Date(timestamp);
+  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// Search and Refresh
+if (sessionSearch) {
+  sessionSearch.addEventListener('input', renderSessions);
+}
+if (refreshSessionsBtn) {
+  refreshSessionsBtn.addEventListener('click', fetchSessions);
 }
 
 // Appearance settings
@@ -144,10 +253,15 @@ function saveSettings() {
     if (r.input) s[r.input.id] = r.input.value;
   });
   if (settingLinesEnabled) s['setting-lines-enabled'] = settingLinesEnabled.checked;
+  if (settingTruncateTools) s['setting-truncate-tools'] = settingTruncateTools.checked;
   if (settingUserColor) s['setting-user-color'] = settingUserColor.value;
   if (settingAssistantColor) s['setting-assistant-color'] = settingAssistantColor.value;
   if (settingRawEditColor) s['setting-raw-edit-color'] = settingRawEditColor.value;
   if (settingFontSize) s['setting-font-size'] = settingFontSize.value;
+  
+  if (settingVisionEnabled) s['setting-vision-enabled'] = settingVisionEnabled.checked;
+  if (settingImageDetail) s['setting-image-detail'] = settingImageDetail.value;
+  if (settingMaxImageSize) s['setting-max-image-size'] = settingMaxImageSize.value;
 
   localStorage.setItem('qwen-settings', JSON.stringify(s));
 }
@@ -175,6 +289,10 @@ function loadSettings() {
       settingLinesEnabled.dispatchEvent(new Event('change'));
     }
 
+    if (settingTruncateTools && s['setting-truncate-tools'] !== undefined) {
+      settingTruncateTools.checked = s['setting-truncate-tools'];
+    }
+
     if (settingUserColor && s['setting-user-color'] !== undefined) {
       settingUserColor.value = s['setting-user-color'];
       settingUserColor.dispatchEvent(new Event('input'));
@@ -187,16 +305,26 @@ function loadSettings() {
       settingRawEditColor.value = s['setting-raw-edit-color'];
       settingRawEditColor.dispatchEvent(new Event('input'));
     }
+    
+    if (settingVisionEnabled && s['setting-vision-enabled'] !== undefined) {
+      settingVisionEnabled.checked = s['setting-vision-enabled'];
+    }
+    if (settingImageDetail && s['setting-image-detail'] !== undefined) {
+      settingImageDetail.value = s['setting-image-detail'];
+    }
+    if (settingMaxImageSize && s['setting-max-image-size'] !== undefined) {
+      settingMaxImageSize.value = s['setting-max-image-size'];
+    }
   } catch (e) {
     console.error('Failed to load settings', e);
   }
 }
 
 // Auto-save settings on any change in the panel
-if (panelSettings) {
-  panelSettings.addEventListener('change', saveSettings);
+if (sidePanel) {
+  sidePanel.addEventListener('change', saveSettings);
   // Optional: save on input for color pickers to save while dragging
-  panelSettings.addEventListener('input', saveSettings);
+  sidePanel.addEventListener('input', saveSettings);
 }
 
 loadSettings();
@@ -298,11 +426,16 @@ function renderMessages() {
   const msgs = state.messages;
   const container = messagesEl;
 
-  // Calculate word count for Status Bar
-  if (statusWords) {
-    const allText = msgs.map(m => m.content || '').join(' ').trim();
-    const words = allText ? allText.split(/\s+/).length : 0;
-    statusWords.textContent = `${words} words`;
+  // Calculate word count and token estimation for Status Bar
+  if (statusWords || statusTokens) {
+    const allText = msgs.map(m => (m.content || '') + (m.function_call ? JSON.stringify(m.function_call) : '') + (m.reasoning_content || '')).join(' ').trim();
+    if (statusWords) {
+      const words = allText ? allText.split(/\s+/).length : 0;
+      statusWords.textContent = `${words} words`;
+    }
+    if (statusTokens) {
+      statusTokens.textContent = `${estimateTokens(allText)} tokens`;
+    }
   }
 
   // Quick check: if nothing meaningful changed, skip heavy re-render
@@ -523,10 +656,11 @@ function renderToolCall(msg) {
 
 function renderToolResult(msg) {
   const content = msg.content || '';
-  const truncated = content.length > 2000 ? content.substring(0, 2000) + '\n\n... (truncated)' : content;
+  const shouldTruncate = settingTruncateTools ? settingTruncateTools.checked : true;
+  const truncated = (shouldTruncate && content.length > 2000) ? content.substring(0, 2000) + '\n\n... (truncated)' : content;
   return `
     <details class="tool-result">
-      <summary>📋 Result from <strong>${escapeHtml(msg.name || 'tool')}</strong></summary>
+      <summary>📋 Result from <strong>${escapeHtml(msg.name || 'tool')}</strong>${shouldTruncate && content.length > 2000 ? ` <span class="truncation-hint">(${content.length.toLocaleString()} chars)</span>` : ''}</summary>
       <pre><code>${escapeHtml(truncated)}</code></pre>
     </details>
   `;
@@ -813,40 +947,68 @@ function renderSubAgents() {
   const sa = state.subAgents;
   const names = Object.keys(sa);
 
-  if (names.length === 0) {
-    subAgentsSection.style.display = 'none';
-    return;
-  }
-  subAgentsSection.style.display = 'block';
+  // Remove stale sub-agent tabs and panels for agents that no longer exist
+  mainTabBar.querySelectorAll('.main-tab[data-tab^="sub-"]').forEach(tab => {
+    const agentName = tab.dataset.tab.substring(4);
+    if (!names.includes(agentName)) {
+      tab.remove();
+      const panel = document.getElementById('panelSub-' + agentName);
+      if (panel) panel.remove();
+    }
+  });
+
+  if (names.length === 0) return;
 
   // Auto-select active tab from stack
   const activeTop = state.activeStack.length > 0 ? state.activeStack[state.activeStack.length - 1] : null;
-  if (activeTop && names.includes(activeTop)) {
-    state.activeSubTab = activeTop;
-  } else if (!state.activeSubTab || !names.includes(state.activeSubTab)) {
-    state.activeSubTab = names[0];
-  }
 
-  // Tabs
-  subAgentTabs.innerHTML = '';
   for (const name of names) {
-    const tab = document.createElement('button');
-    tab.className = 'sub-tab' + (name === state.activeSubTab ? ' active' : '');
+    const tabId = 'sub-' + name;
     const isActive = sa[name].active;
-    tab.innerHTML = `${isActive ? '🔄 ' : ''}${escapeHtml(name)}`;
-    tab.onclick = () => {
-      state.activeSubTab = name;
-      renderSubAgents();
-    };
-    subAgentTabs.appendChild(tab);
+
+    // Create tab button if it doesn't exist
+    let tabBtn = mainTabBar.querySelector(`.main-tab[data-tab="${tabId}"]`);
+    if (!tabBtn) {
+      tabBtn = document.createElement('button');
+      tabBtn.className = 'main-tab';
+      tabBtn.dataset.tab = tabId;
+      tabBtn.onclick = () => switchMainTab(tabId);
+      mainTabBar.appendChild(tabBtn);
+    }
+    tabBtn.innerHTML = `${isActive ? '<span class="sub-tab-pulse"></span>' : '<span class="main-tab-icon">🤖</span>'} ${escapeHtml(name)}`;
+    // Highlight the active sub-agent's tab
+    if (isActive && activeTop === name) {
+      tabBtn.classList.add('has-activity');
+    } else {
+      tabBtn.classList.remove('has-activity');
+    }
+
+    // Create or update panel
+    let panel = document.getElementById('panelSub-' + name);
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'main-tab-panel sub-agent-panel';
+      panel.id = 'panelSub-' + name;
+      mainTabPanels.appendChild(panel);
+    }
+
+    // Render sub-agent messages into the panel
+    renderSubAgentPanel(panel, sa[name]);
   }
+}
 
-  // Content
-  const active = sa[state.activeSubTab];
-  if (!active) { subAgentContent.innerHTML = ''; return; }
+function renderSubAgentPanel(panel, agentData) {
+  const msgs = agentData.messages || [];
+  // Only re-render if content changed (include reasoning_content in key)
+  const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+  const contentKey = msgs.length + ':' + (lastMsg ? (lastMsg.content || '').length : 0) + ':' + (lastMsg ? (lastMsg.reasoning_content || '').length : 0);
+  if (panel.dataset.contentKey === contentKey) return;
+  panel.dataset.contentKey = contentKey;
 
-  subAgentContent.innerHTML = '';
-  const msgs = active.messages || [];
+  panel.innerHTML = '';
+
+  const scrollContainer = document.createElement('div');
+  scrollContainer.className = 'sub-agent-messages';
 
   for (const msg of msgs) {
     if (msg.role === 'system') continue;
@@ -867,30 +1029,159 @@ function renderSubAgents() {
     } else if (msg.role === 'function') {
       content.innerHTML = renderToolResult(msg);
     } else {
-      content.innerHTML = renderMarkdown(msg.content || '');
+      // Render with thinking/reasoning support (same as main chat)
+      let html = '';
+      const reasoning = msg.reasoning_content;
+      if (reasoning) {
+        html += renderThinkingBlock(reasoning, agentData.active && msg === msgs[msgs.length - 1]);
+      }
+      const textContent = msg.content || '';
+      const thinkMatch = textContent.match(/<think>([\s\S]*?)(<\/think>|$)/);
+      if (thinkMatch) {
+        const thought = thinkMatch[1];
+        const isOpen = !textContent.includes('</think>');
+        const before = textContent.substring(0, textContent.indexOf('<think>'));
+        const after = textContent.includes('</think>') ? textContent.substring(textContent.indexOf('</think>') + 8) : '';
+        if (before.trim()) html += renderMarkdown(before);
+        html += renderThinkingBlock(thought, isOpen);
+        if (after.trim()) html += renderMarkdown(after);
+      } else {
+        html += renderMarkdown(textContent);
+      }
+      content.innerHTML = html;
     }
 
     div.appendChild(label);
     div.appendChild(content);
-    subAgentContent.appendChild(div);
+    scrollContainer.appendChild(div);
   }
 
-  // Auto-scroll sub panel
-  subAgentContent.scrollTop = subAgentContent.scrollHeight;
+  panel.appendChild(scrollContainer);
+
+  // Auto-scroll
+  scrollContainer.scrollTop = scrollContainer.scrollHeight;
+}
+
+function switchMainTab(tabId) {
+  // Update tab buttons
+  mainTabBar.querySelectorAll('.main-tab').forEach(t => t.classList.remove('active'));
+  const activeTab = mainTabBar.querySelector(`.main-tab[data-tab="${tabId}"]`);
+  if (activeTab) activeTab.classList.add('active');
+
+  // Update panels
+  mainTabPanels.querySelectorAll('.main-tab-panel').forEach(p => p.classList.remove('active'));
+  if (tabId === 'chat') {
+    document.getElementById('panelChat').classList.add('active');
+  } else {
+    const name = tabId.substring(4); // strip 'sub-'
+    const panel = document.getElementById('panelSub-' + name);
+    if (panel) panel.classList.add('active');
+  }
+}
+
+// Wire up the static Chat tab
+if (mainTabChat) {
+  mainTabChat.addEventListener('click', () => switchMainTab('chat'));
 }
 
 // ── Agent selector ───────────────────────────────────────────────────────────
 
-function renderAgentSelect() {
-  agentSelect.innerHTML = '';
-  for (const agent of state.agents) {
-    const opt = document.createElement('option');
-    opt.value = agent.index;
-    opt.textContent = agent.name;
-    if (agent.index === state.agentIndex) opt.selected = true;
-    agentSelect.appendChild(opt);
-  }
+const settingAgentSelect = $('#setting-agent-select');
+const settingToolsList = $('#setting-tools-list');
+
+if (!localStorage.getItem('qwen-tools-migrated-v2')) {
+  localStorage.removeItem('qwen-disabled-tools');
+  localStorage.setItem('qwen-tools-migrated-v2', '1');
 }
+
+let agentDisabledTools = JSON.parse(localStorage.getItem('qwen-disabled-tools') || '{}');
+
+function renderAgentSelect() {
+  if (agentSelect) agentSelect.innerHTML = '';
+  if (settingAgentSelect) settingAgentSelect.innerHTML = '';
+  
+  let updatedDisabledTools = false;
+  
+  for (const agent of state.agents) {
+    if (!agentDisabledTools[agent.name] && agent.tools) {
+      const defaultTools = agent.default_tools || agent.tools;
+      agentDisabledTools[agent.name] = agent.tools.filter(t => !defaultTools.includes(t));
+      updatedDisabledTools = true;
+    }
+    
+    if (agentSelect) {
+      const opt = document.createElement('option');
+      opt.value = agent.index;
+      opt.textContent = agent.name;
+      if (agent.index === state.agentIndex) opt.selected = true;
+      agentSelect.appendChild(opt);
+    }
+    if (settingAgentSelect) {
+      const opt2 = document.createElement('option');
+      opt2.value = agent.index;
+      opt2.textContent = agent.name;
+      if (agent.index === state.agentIndex) opt2.selected = true;
+      settingAgentSelect.appendChild(opt2);
+    }
+  }
+  
+  if (updatedDisabledTools) {
+    localStorage.setItem('qwen-disabled-tools', JSON.stringify(agentDisabledTools));
+  }
+  
+  renderToolsForSelectedAgent();
+}
+
+function renderToolsForSelectedAgent() {
+  if (!settingToolsList || !settingAgentSelect) return;
+  const idx = parseInt(settingAgentSelect.value);
+  if (isNaN(idx)) return;
+  const agent = state.agents.find(a => a.index === idx);
+  
+  if (!agent || !agent.tools || agent.tools.length === 0) {
+    settingToolsList.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">No tools available for this agent.</div>';
+    return;
+  }
+  
+  const disabled = agentDisabledTools[agent.name] || [];
+  
+  settingToolsList.innerHTML = agent.tools.map(toolName => `
+    <label class="setting-field toggle-field">
+      <span>${escapeHtml(toolName)}</span>
+      <input type="checkbox" class="tool-toggle" data-agent="${escapeHtml(agent.name)}" data-tool="${escapeHtml(toolName)}" ${!disabled.includes(toolName) ? 'checked' : ''} />
+    </label>
+  `).join('');
+  
+  settingToolsList.querySelectorAll('.tool-toggle').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const aName = e.target.dataset.agent;
+      const tName = e.target.dataset.tool;
+      if (!agentDisabledTools[aName]) agentDisabledTools[aName] = [];
+      if (!e.target.checked) {
+        if (!agentDisabledTools[aName].includes(tName)) agentDisabledTools[aName].push(tName);
+      } else {
+        agentDisabledTools[aName] = agentDisabledTools[aName].filter(t => t !== tName);
+      }
+      localStorage.setItem('qwen-disabled-tools', JSON.stringify(agentDisabledTools));
+      saveSettings();
+    });
+  });
+}
+
+if (settingAgentSelect) {
+  settingAgentSelect.addEventListener('change', renderToolsForSelectedAgent);
+}
+
+// Settings Tabs
+document.querySelectorAll('.settings-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    const panel = document.getElementById(btn.dataset.tab);
+    if (panel) panel.classList.add('active');
+  });
+});
 
 // ── Controls ─────────────────────────────────────────────────────────────────
 
@@ -920,6 +1211,26 @@ function autoResize(el) {
   el.style.height = Math.min(el.scrollHeight, 200) + 'px';
 }
 
+function estimateTokens(text) {
+  let imageTokens = 0;
+  
+  // Strip out base64 image strings so they don't skew the text length
+  const imageRegex = /!\[(.*?)\]\((data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+)\)/g;
+  const visionEnabled = settingVisionEnabled ? settingVisionEnabled.checked : false;
+  
+  const cleanedText = text.replace(imageRegex, (match, alt) => {
+    // If vision is enabled, we'll estimate roughly 255 tokens per image 
+    if (visionEnabled) {
+      imageTokens += 255;
+    }
+    return `[Image: ${alt}]`;
+  });
+
+  // Prose estimation: modern tokenizer ratios (LLaMA/Mistral)
+  // roughly average 1 token ≈ 4.86 characters
+  return Math.ceil(cleanedText.length / 4.86) + imageTokens;
+}
+
 // ── Utilities ────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
@@ -927,6 +1238,106 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+
+function formatMultimodalContent(text) {
+  if (typeof text !== 'string') return text;
+  const visionEnabled = settingVisionEnabled ? settingVisionEnabled.checked : false;
+  if (visionEnabled) return text;
+
+  // Strip image data, leave placeholder if vision is disabled
+  const imageRegex = /!\[(.*?)\]\((data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+)\)/g;
+  return text.replace(imageRegex, "[Image: $1]");
+}
+
+// ── Image Handling ───────────────────────────────────────────────────────────
+
+function insertImageMarkdown(base64Data, filename) {
+  const markdown = `![${filename}](${base64Data})`;
+  const startPos = chatInput.selectionStart;
+  const endPos = chatInput.selectionEnd;
+  const text = chatInput.value;
+  chatInput.value = text.substring(0, startPos) + markdown + text.substring(endPos);
+  chatInput.selectionStart = chatInput.selectionEnd = startPos + markdown.length;
+  chatInput.focus();
+  autoResize(chatInput);
+}
+
+function processImageFile(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  
+  const maxSize = settingMaxImageSize ? parseInt(settingMaxImageSize.value) : 1024;
+  const reader = new FileReader();
+  
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+      
+      if (width > maxSize || height > maxSize) {
+        if (width > height) {
+          height = Math.round((height * maxSize) / width);
+          width = maxSize;
+        } else {
+          width = Math.round((width * maxSize) / height);
+          height = maxSize;
+        }
+      }
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      const mimeType = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+      const dataUrl = canvas.toDataURL(mimeType, 0.9);
+      insertImageMarkdown(dataUrl, file.name || 'image');
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+if (insertImageBtn && imageInput) {
+  insertImageBtn.addEventListener('click', () => imageInput.click());
+  imageInput.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      processImageFile(e.target.files[0]);
+    }
+    e.target.value = ''; // Reset input
+  });
+}
+
+chatInput.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  chatInput.classList.add('drag-over');
+});
+
+chatInput.addEventListener('dragleave', () => {
+  chatInput.classList.remove('drag-over');
+});
+
+chatInput.addEventListener('drop', (e) => {
+  e.preventDefault();
+  chatInput.classList.remove('drag-over');
+  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    Array.from(e.dataTransfer.files).forEach(processImageFile);
+  }
+});
+
+chatInput.addEventListener('paste', (e) => {
+  if (e.clipboardData && e.clipboardData.items) {
+    const items = e.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        processImageFile(file);
+      }
+    }
+  }
+});
 
 // ── Event listeners ──────────────────────────────────────────────────────────
 
@@ -976,61 +1387,18 @@ function getGenerateCfg() {
   if ($('#setting-presence-penalty')) cfg.presence_penalty = parseFloat($('#setting-presence-penalty').value);
   if ($('#setting-frequency-penalty')) cfg.frequency_penalty = parseFloat($('#setting-frequency-penalty').value);
   if ($('#setting-max-tokens')) cfg.max_tokens = parseInt($('#setting-max-tokens').value) || 2048;
+  
+  if (typeof agentDisabledTools !== 'undefined') {
+    cfg.disabled_tools = agentDisabledTools;
+  }
   return cfg;
 }
 
 function sendMessage() {
-  const text = chatInput.value.trim();
-  if (!text) return;
-  chatInput.value = '';
-  autoResize(chatInput);
-
-  send({
-    type: 'message',
-    text,
-    agent_index: state.agentIndex,
-    session_name: state.sessionName,
-    generate_cfg: getGenerateCfg()
-  });
-}
-
-function retryGeneration() {
-  if (state.generating) return;
-  send({
-    type: 'retry',
-    agent_index: state.agentIndex,
-    session_name: state.sessionName,
-    generate_cfg: getGenerateCfg()
-  });
-}
-
-// ── Init ─────────────────────────────────────────────────────────────────────
-connect();
-sessionNameInput.addEventListener('change', () => {
-  state.sessionName = sessionNameInput.value.trim() || 'Maine';
-  send({ type: 'set_session_name', name: state.sessionName });
-});
-
-function getGenerateCfg() {
-  const cfg = {};
-  if ($('#setting-endpoint') && $('#setting-endpoint').value.trim()) cfg.api_base = $('#setting-endpoint').value.trim();
-  if ($('#setting-api-key') && $('#setting-api-key').value.trim()) cfg.api_key = $('#setting-api-key').value.trim();
-  if ($('#setting-model') && $('#setting-model').value.trim()) cfg.model = $('#setting-model').value.trim();
-
-  if ($('#setting-temperature')) cfg.temperature = parseFloat($('#setting-temperature').value);
-  if ($('#setting-top-p')) cfg.top_p = parseFloat($('#setting-top-p').value);
-  if ($('#setting-top-k')) cfg.top_k = parseInt($('#setting-top-k').value);
-  if ($('#setting-min-p')) cfg.min_p = parseFloat($('#setting-min-p').value);
-  if ($('#setting-repeat-penalty')) cfg.repeat_penalty = parseFloat($('#setting-repeat-penalty').value);
-  if ($('#setting-presence-penalty')) cfg.presence_penalty = parseFloat($('#setting-presence-penalty').value);
-  if ($('#setting-frequency-penalty')) cfg.frequency_penalty = parseFloat($('#setting-frequency-penalty').value);
-  if ($('#setting-max-tokens')) cfg.max_tokens = parseInt($('#setting-max-tokens').value) || 2048;
-  return cfg;
-}
-
-function sendMessage() {
-  const text = chatInput.value.trim();
-  if (!text) return;
+  const rawText = chatInput.value.trim();
+  if (!rawText) return;
+  
+  const text = formatMultimodalContent(rawText);
   chatInput.value = '';
   autoResize(chatInput);
 

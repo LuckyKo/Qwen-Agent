@@ -21,12 +21,20 @@
     <!-- Top Toolbar -->
     <header id="toolbar">
       <div class="toolbar-left">
+        <button id="btn-toggle-sidebar" class="toolbar-btn" title="Toggle Sidebar">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
         <span class="app-title">Qwen-Agent</span>
       </div>
       <div class="toolbar-center">
         <!-- Center actions can go here in the future -->
       </div>
       <div class="toolbar-right">
+        <span class="connection-dot" id="connectionDot" title="Disconnected"></span>
         <button id="btn-toggle-settings" class="toolbar-btn" title="Toggle Settings Panel">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3" />
@@ -38,147 +46,247 @@
     </header>
 
     <div class="app-body">
-      <!-- Sidebar -->
-      <aside class="sidebar" id="sidebar">
+      <!-- Left Sidebar: Session Manager -->
+      <aside class="sidebar" id="app-sidebar">
         <div class="sidebar-header">
-          <h1>🤖 Qwen-Agent</h1>
-          <span class="connection-dot" id="connectionDot" title="Disconnected"></span>
+          <div class="logo">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="var(--accent)">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+            </svg>
+            <h1>Qwen</h1>
+          </div>
         </div>
 
-        <div class="sidebar-section">
-          <label class="sidebar-label">Agent</label>
-          <select id="agentSelect" class="sidebar-select"></select>
-        </div>
+        <div class="sidebar-scroll">
+          <div class="sidebar-section">
+            <label class="sidebar-label">Agent Soul</label>
+            <select id="agentSelect" class="sidebar-select"></select>
+          </div>
 
-        <div class="sidebar-section">
-          <label class="sidebar-label">Session</label>
-          <input type="text" id="sessionName" class="sidebar-input" value="Maine" placeholder="Session name...">
-        </div>
+          <div class="sidebar-section">
+            <label class="sidebar-label">Active Session</label>
+            <input type="text" id="sessionName" class="sidebar-input" value="Maine" placeholder="Session name...">
+          </div>
 
-        <div class="sidebar-section sidebar-actions">
-          <button id="resetBtn" class="btn btn-danger" title="Reset Chat">🗑️ Reset</button>
-          <button id="retryBtn" class="btn btn-secondary" title="Retry Last">🔄 Retry</button>
-        </div>
+          <div class="sidebar-section sidebar-actions">
+            <button id="resetBtn" class="btn btn-danger" title="Reset Chat">🗑️ Reset</button>
+            <button id="retryBtn" class="btn btn-secondary" title="Retry Last">🔄 Retry</button>
+          </div>
 
-        <!-- Sub-agent panel -->
-        <div class="sidebar-section sub-agents-section" id="subAgentsSection" style="display:none;">
-          <label class="sidebar-label">Sub-Agents</label>
-          <div class="sub-agent-tabs" id="subAgentTabs"></div>
-          <div class="sub-agent-content" id="subAgentContent"></div>
+          <div class="sidebar-divider"></div>
+
+          <div class="sessions-section">
+            <div class="sessions-section-header">
+              <label class="sidebar-label">Saved Sessions</label>
+              <button id="refreshSessionsBtn" class="btn-icon-sm" title="Refresh">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+                </svg>
+              </button>
+            </div>
+            <div class="session-search">
+              <input type="text" id="sessionSearch" placeholder="Filter..." />
+            </div>
+            <div id="sessionsList" class="sessions-list">
+              <div class="sessions-placeholder">Loading...</div>
+            </div>
+          </div>
         </div>
       </aside>
 
       <!-- Main chat -->
       <main class="main">
-        <div class="messages" id="messages"></div>
+        <!-- Tab bar for Chat + Sub-agents -->
+        <div class="main-tab-bar" id="mainTabBar">
+          <button class="main-tab active" data-tab="chat" id="mainTabChat">
+            <span class="main-tab-icon">💬</span> Chat
+          </button>
+          <!-- Sub-agent tabs injected here dynamically -->
+        </div>
 
-        <!-- Approval inline area (appears above input when approvals pending) -->
-        <div class="approval-bar" id="approvalBar" style="display:none;"></div>
+        <!-- Tab panels -->
+        <div class="main-tab-panels">
+          <!-- Chat panel (default) -->
+          <div class="main-tab-panel active" id="panelChat">
+            <div class="messages" id="messages"></div>
 
-        <div class="input-area">
-          <div class="input-wrapper">
-            <textarea id="chatInput" placeholder="Send a message..." rows="1"></textarea>
-            <button id="sendBtn" class="btn btn-primary send-btn" title="Send (Enter)">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M2 21l21-9L2 3v7l15 2-15 2z" />
-              </svg>
-            </button>
+            <!-- Approval inline area -->
+            <div class="approval-bar" id="approvalBar" style="display:none;"></div>
+
+            <div class="input-area">
+              <div class="input-wrapper">
+                <button id="insertImageBtn" class="btn btn-icon" title="Insert Image"
+                  style="padding: 0 10px; background: none; border: none; color: var(--text-secondary); cursor: pointer;">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <polyline points="21 15 16 10 5 21" />
+                  </svg>
+                </button>
+                <input type="file" id="imageInput" accept="image/*" style="display: none;">
+                <textarea id="chatInput" placeholder="Send a message..." rows="1"></textarea>
+                <button id="sendBtn" class="btn btn-primary send-btn" title="Send (Enter)">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                    <path d="M2 21l21-9L2 3v7l15 2-15 2z" />
+                  </svg>
+                </button>
+              </div>
+              <div class="input-controls">
+                <button id="stopBtn" class="btn btn-stop" style="display:none;">⏹ Stop</button>
+                <span class="status-text" id="statusText"></span>
+              </div>
+            </div>
           </div>
-          <div class="input-controls">
-            <button id="stopBtn" class="btn btn-stop" style="display:none;">⏹ Stop</button>
-            <span class="status-text" id="statusText"></span>
-          </div>
+          <!-- Sub-agent panels injected here dynamically -->
         </div>
       </main>
 
       <!-- Right Panel: Settings -->
-      <aside id="panel-settings" class="side-panel collapsed">
-        <div class="panel-header">
+      <aside id="side-panel" class="side-panel collapsed">
+        <div class="panel-header" style="flex-direction: column; align-items: stretch; gap: 12px; padding-bottom: 0;">
           <h2>Settings</h2>
+          <div class="settings-tabs">
+            <button class="settings-tab active" data-tab="settings-general">General</button>
+            <button class="settings-tab" data-tab="settings-agent">Agent & Tools</button>
+          </div>
         </div>
-        <div class="settings-content" id="settings-content">
-          <!-- Connection -->
-          <div class="settings-section">
-            <h3 class="settings-section-title">Connection</h3>
-            <div class="settings-section-body">
-              <label class="setting-field">
-                <span>API Endpoint</span>
-                <input type="text" id="setting-endpoint" placeholder="http://localhost:5001/v1" />
-              </label>
-              <label class="setting-field">
-                <span>API Key <em>(optional)</em></span>
-                <input type="password" id="setting-api-key" placeholder="sk-..." />
-              </label>
-              <label class="setting-field">
-                <span>Model</span>
-                <input type="text" id="setting-model" placeholder="Model name or ID" />
-              </label>
+
+        <div class="side-panel-content">
+          <!-- General Settings Tab -->
+          <div class="settings-tab-panel active" id="settings-general">
+            <div class="settings-content">
+            <!-- Connection -->
+            <div class="settings-section">
+              <h3 class="settings-section-title">Connection</h3>
+              <div class="settings-section-body">
+                <label class="setting-field">
+                  <span>API Endpoint</span>
+                  <input type="text" id="setting-endpoint" placeholder="http://localhost:5001/v1" />
+                </label>
+                <label class="setting-field">
+                  <span>API Key <em>(optional)</em></span>
+                  <input type="password" id="setting-api-key" placeholder="sk-..." />
+                </label>
+                <label class="setting-field">
+                  <span>Model</span>
+                  <input type="text" id="setting-model" placeholder="Model name or ID" />
+                </label>
+              </div>
+            </div>
+
+            <!-- Sampling Parameters -->
+            <div class="settings-section">
+              <h3 class="settings-section-title">Sampling</h3>
+              <div class="settings-section-body">
+                <label class="setting-field">
+                  <span>Temperature <output id="val-temperature">0.8</output></span>
+                  <input type="range" id="setting-temperature" min="0" max="2" step="0.05" value="0.8" />
+                </label>
+                <label class="setting-field">
+                  <span>Top-P <output id="val-top-p">0.95</output></span>
+                  <input type="range" id="setting-top-p" min="0" max="1" step="0.01" value="0.95" />
+                </label>
+                <label class="setting-field">
+                  <span>Top-K <output id="val-top-k">40</output></span>
+                  <input type="range" id="setting-top-k" min="0" max="200" step="1" value="40" />
+                </label>
+                <label class="setting-field">
+                  <span>Min-P <output id="val-min-p">0.05</output></span>
+                  <input type="range" id="setting-min-p" min="0" max="1" step="0.01" value="0.05" />
+                </label>
+                <label class="setting-field">
+                  <span>Repeat Penalty <output id="val-repeat-penalty">1.05</output></span>
+                  <input type="range" id="setting-repeat-penalty" min="1" max="2" step="0.01" value="1.05" />
+                </label>
+                <label class="setting-field">
+                  <span>Presence Penalty <output id="val-presence-penalty">0.0</output></span>
+                  <input type="range" id="setting-presence-penalty" min="-2" max="2" step="0.1" value="0.0" />
+                </label>
+                <label class="setting-field">
+                  <span>Frequency Penalty <output id="val-frequency-penalty">0.0</output></span>
+                  <input type="range" id="setting-frequency-penalty" min="-2" max="2" step="0.1" value="0.0" />
+                </label>
+                <label class="setting-field">
+                  <span>Max Tokens</span>
+                  <input type="number" id="setting-max-tokens" min="1" max="32768" value="2048" />
+                </label>
+              </div>
+            </div>
+
+            <!-- Vision Support -->
+            <div class="settings-section">
+              <h3 class="settings-section-title">Vision</h3>
+              <div class="settings-section-body">
+                <label class="setting-field toggle-field">
+                  <span>Vision Enabled</span>
+                  <input type="checkbox" id="setting-vision-enabled" />
+                </label>
+                <label class="setting-field">
+                  <span>Image Detail</span>
+                  <select id="setting-image-detail">
+                    <option value="auto">Auto</option>
+                    <option value="low">Low</option>
+                    <option value="high">High</option>
+                  </select>
+                </label>
+                <label class="setting-field">
+                  <span>Max Image Size (px)</span>
+                  <input type="number" id="setting-max-image-size" min="256" max="4096" value="1024" />
+                </label>
+              </div>
+            </div>
+
+            <!-- Appearance -->
+            <div class="settings-section">
+              <h3 class="settings-section-title">Appearance</h3>
+              <div class="settings-section-body">
+                <label class="setting-field toggle-field">
+                  <span>Show Line Numbers</span>
+                  <input type="checkbox" id="setting-lines-enabled" checked />
+                </label>
+                <label class="setting-field toggle-field">
+                  <span>Truncate Tool Output</span>
+                  <input type="checkbox" id="setting-truncate-tools" checked />
+                </label>
+                <label class="setting-field">
+                  <span>User Message Color</span>
+                  <input type="color" id="setting-user-color" value="#1a3a5c" />
+                </label>
+                <label class="setting-field">
+                  <span>Assistant Message Color</span>
+                  <input type="color" id="setting-assistant-color" value="#1c2333" />
+                </label>
+                <label class="setting-field">
+                  <span>Raw Edit Background Color</span>
+                  <input type="color" id="setting-raw-edit-color" value="#111418" />
+                </label>
+                <label class="setting-field">
+                  <span>Font Size <output id="val-font-size">14</output>px</span>
+                  <input type="range" id="setting-font-size" min="12" max="24" step="1" value="14" />
+                </label>
+              </div>
             </div>
           </div>
-
-          <!-- Sampling Parameters -->
-          <div class="settings-section">
-            <h3 class="settings-section-title">Sampling</h3>
-            <div class="settings-section-body">
-              <label class="setting-field">
-                <span>Temperature <output id="val-temperature">0.8</output></span>
-                <input type="range" id="setting-temperature" min="0" max="2" step="0.05" value="0.8" />
-              </label>
-              <label class="setting-field">
-                <span>Top-P <output id="val-top-p">0.95</output></span>
-                <input type="range" id="setting-top-p" min="0" max="1" step="0.01" value="0.95" />
-              </label>
-              <label class="setting-field">
-                <span>Top-K <output id="val-top-k">40</output></span>
-                <input type="range" id="setting-top-k" min="0" max="200" step="1" value="40" />
-              </label>
-              <label class="setting-field">
-                <span>Min-P <output id="val-min-p">0.05</output></span>
-                <input type="range" id="setting-min-p" min="0" max="1" step="0.01" value="0.05" />
-              </label>
-              <label class="setting-field">
-                <span>Repeat Penalty <output id="val-repeat-penalty">1.05</output></span>
-                <input type="range" id="setting-repeat-penalty" min="1" max="2" step="0.01" value="1.05" />
-              </label>
-              <label class="setting-field">
-                <span>Presence Penalty <output id="val-presence-penalty">0.0</output></span>
-                <input type="range" id="setting-presence-penalty" min="-2" max="2" step="0.1" value="0.0" />
-              </label>
-              <label class="setting-field">
-                <span>Frequency Penalty <output id="val-frequency-penalty">0.0</output></span>
-                <input type="range" id="setting-frequency-penalty" min="-2" max="2" step="0.1" value="0.0" />
-              </label>
-              <label class="setting-field">
-                <span>Max Tokens</span>
-                <input type="number" id="setting-max-tokens" min="1" max="32768" value="2048" />
-              </label>
-            </div>
           </div>
 
-          <!-- Appearance -->
-          <div class="settings-section">
-            <h3 class="settings-section-title">Appearance</h3>
-            <div class="settings-section-body">
-              <label class="setting-field toggle-field">
-                <span>Show Line Numbers</span>
-                <input type="checkbox" id="setting-lines-enabled" checked />
-              </label>
-              <label class="setting-field">
-                <span>User Message Color</span>
-                <input type="color" id="setting-user-color" value="#1a3a5c" />
-              </label>
-              <label class="setting-field">
-                <span>Assistant Message Color</span>
-                <input type="color" id="setting-assistant-color" value="#1c2333" />
-              </label>
-              <label class="setting-field">
-                <span>Raw Edit Background Color</span>
-                <input type="color" id="setting-raw-edit-color" value="#111418" />
-              </label>
-              <label class="setting-field">
-                <span>Font Size <output id="val-font-size">14</output>px</span>
-                <input type="range" id="setting-font-size" min="12" max="24" step="1" value="14" />
-              </label>
+          <!-- Agent & Tools Tab -->
+          <div class="settings-tab-panel" id="settings-agent">
+            <div class="settings-content">
+              <div class="settings-section">
+                <h3 class="settings-section-title">Agent Configuration</h3>
+                <div class="settings-section-body">
+                  <label class="setting-field">
+                    <span>Target Agent</span>
+                    <select id="setting-agent-select" class="sidebar-select"></select>
+                  </label>
+                </div>
+              </div>
+              <div class="settings-section">
+                <h3 class="settings-section-title">Active Tools</h3>
+                <div id="setting-tools-list" class="settings-section-body">
+                  <!-- Tool toggles injected here -->
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -191,6 +299,8 @@
         <span id="status-save" class="status-item" title="Connection Status">Connected</span>
         <span class="status-divider">|</span>
         <span id="status-words" class="status-item" title="Word Count">0 words</span>
+        <span class="status-divider">|</span>
+        <span id="status-tokens" class="status-item" title="Estimated Context Tokens">0 tokens</span>
       </div>
       <div class="status-center">
         <span id="status-gen-info" class="status-item gen-info" title="Last Generation Info"></span>
