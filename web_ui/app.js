@@ -80,6 +80,8 @@ const settingMaxImageSize = $('#setting-max-image-size');
 const insertImageBtn = $('#insertImageBtn');
 const imageInput = $('#imageInput');
 
+const settingMcpServers = $('#setting-mcp-servers');
+
 // Range outputs
 const ranges = [
   { input: $('#setting-temperature'), output: $('#val-temperature') },
@@ -277,6 +279,7 @@ function saveSettings() {
   if (settingVisionEnabled) s['setting-vision-enabled'] = settingVisionEnabled.checked;
   if (settingImageDetail) s['setting-image-detail'] = settingImageDetail.value;
   if (settingMaxImageSize) s['setting-max-image-size'] = settingMaxImageSize.value;
+  if (settingMcpServers) s['setting-mcp-servers'] = settingMcpServers.value;
 
   localStorage.setItem('qwen-settings', JSON.stringify(s));
 }
@@ -347,6 +350,10 @@ function loadSettings() {
     }
     if (settingMaxImageSize && s['setting-max-image-size'] !== undefined) {
       settingMaxImageSize.value = s['setting-max-image-size'];
+    }
+
+    if (settingMcpServers && s['setting-mcp-servers'] !== undefined) {
+      settingMcpServers.value = s['setting-mcp-servers'];
     }
   } catch (e) {
     console.error('Failed to load settings', e);
@@ -649,24 +656,25 @@ function createMessageEl(msg, index) {
   const contentDiv = document.createElement('div');
   contentDiv.className = 'msg-content';
 
+  let html = '';
+  const isGenerating = state.generating && index === state.messages.length - 1;
+
+  // Handle reasoning/thinking content first (always shown if present)
+  if (msg.reasoning_content) {
+    html += renderThinkingBlock(msg.reasoning_content, isGenerating);
+  }
+
   if (msg.function_call) {
     // Tool call bubble
-    contentDiv.innerHTML = renderToolCall(msg);
+    html += renderToolCall(msg);
   } else if (msg.role === 'function') {
     // Tool result bubble
-    contentDiv.innerHTML = renderToolResult(msg);
+    html += renderToolResult(msg);
   } else {
     // Regular text (user or assistant)
     const textContent = msg.content || '';
-    let html = '';
 
-    // Handle reasoning/thinking content
-    const reasoning = msg.reasoning_content;
-    if (reasoning) {
-      html += renderThinkingBlock(reasoning, state.generating && index === state.messages.length - 1);
-    }
-
-    // Handle <think> tags in content
+    // Handle <think> tags in content (fallback for models that don't use reasoning_content field)
     const thinkMatch = textContent.match(/<think>([\s\S]*?)(<\/think>|$)/);
     if (thinkMatch) {
       const thought = thinkMatch[1];
@@ -681,9 +689,9 @@ function createMessageEl(msg, index) {
     } else {
       html += renderMarkdown(textContent);
     }
-
-    contentDiv.innerHTML = html;
   }
+
+  contentDiv.innerHTML = html;
 
   div.appendChild(contentDiv);
   return div;
@@ -693,16 +701,18 @@ function updateBubbleContent(bubble, msg) {
   const contentDiv = bubble.querySelector('.msg-content');
   if (!contentDiv) return;
 
+  let html = '';
+  const isGenerating = state.generating;
+
+  if (msg.reasoning_content) {
+    html += renderThinkingBlock(msg.reasoning_content, isGenerating);
+  }
+
   if (msg.function_call) {
-    contentDiv.innerHTML = renderToolCall(msg);
+    html += renderToolCall(msg);
   } else if (msg.role === 'function') {
-    contentDiv.innerHTML = renderToolResult(msg);
+    html += renderToolResult(msg);
   } else {
-    let html = '';
-    const reasoning = msg.reasoning_content;
-    if (reasoning) {
-      html += renderThinkingBlock(reasoning, state.generating);
-    }
     const text = msg.content || '';
     const thinkMatch = text.match(/<think>([\s\S]*?)(<\/think>|$)/);
     if (thinkMatch) {
@@ -716,8 +726,8 @@ function updateBubbleContent(bubble, msg) {
     } else {
       html += renderMarkdown(text);
     }
-    contentDiv.innerHTML = html;
   }
+  contentDiv.innerHTML = html;
 }
 
 function renderMarkdown(text) {
@@ -1107,21 +1117,55 @@ function renderSubAgentPanel(panel, agentData, name) {
     updateContextBar(fillEl, msgs);
   }
 
-  // Only re-render if content changed (include reasoning_content in key)
-  const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
-  const contentKey = msgs.length + ':' + (lastMsg ? (lastMsg.content || '').length : 0) + ':' + (lastMsg ? (lastMsg.reasoning_content || '').length : 0);
-  if (panel.dataset.contentKey === contentKey) return;
-  panel.dataset.contentKey = contentKey;
-
+  // 1. Ensure scroll container exists
   let scrollContainer = panel.querySelector('.sub-agent-messages');
   if (!scrollContainer) {
     scrollContainer = document.createElement('div');
     scrollContainer.className = 'sub-agent-messages';
     panel.appendChild(scrollContainer);
   }
-  
-  scrollContainer.innerHTML = '';
 
+  // 2. Ensure activity bar exists and is at the bottom
+  let activityBar = panel.querySelector('.sub-agent-activity-bar');
+  if (!activityBar) {
+    activityBar = document.createElement('div');
+    activityBar.className = 'sub-agent-activity-bar';
+    activityBar.innerHTML = `
+      <div class="activity-status">
+        <span class="activity-dot"></span>
+        <span>Activity</span>
+      </div>
+      <div class="activity-text">Idle</div>
+    `;
+    panel.appendChild(activityBar);
+  }
+
+  // 3. Always update activity bar status
+  const activityText = activityBar.querySelector('.activity-text');
+  const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+  if (agentData.active) {
+    activityBar.classList.add('active');
+    if (lastMsg) {
+      const fullText = (lastMsg.reasoning_content || '') + (lastMsg.content || '') + (lastMsg.function_call ? JSON.stringify(lastMsg.function_call) : '');
+      activityText.textContent = getLastWords(fullText, 10) || 'Streaming...';
+    } else {
+      activityText.textContent = 'Agent Starting...';
+    }
+  } else {
+    activityBar.classList.remove('active');
+    activityText.textContent = 'Agent Idle';
+  }
+
+  // 4. Only re-render messages if content changed
+  const contentKey = msgs.length + ':' + (lastMsg ? (lastMsg.content || '').length : 0) + ':' + (lastMsg ? (lastMsg.reasoning_content || '').length : 0);
+  if (panel.dataset.contentKey === contentKey) {
+    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    return;
+  }
+  panel.dataset.contentKey = contentKey;
+
+  // 5. Render messages
+  scrollContainer.innerHTML = '';
   for (const msg of msgs) {
     if (msg.role === 'system') continue;
     const div = document.createElement('div');
@@ -1136,17 +1180,18 @@ function renderSubAgentPanel(panel, agentData, name) {
     const content = document.createElement('div');
     content.className = 'sub-msg-content';
 
+    let html = '';
+    const isGenerating = agentData.active && msg === msgs[msgs.length - 1];
+
+    if (msg.reasoning_content) {
+      html += renderThinkingBlock(msg.reasoning_content, isGenerating);
+    }
+
     if (msg.function_call) {
-      content.innerHTML = renderToolCall(msg);
+      html += renderToolCall(msg);
     } else if (msg.role === 'function') {
-      content.innerHTML = renderToolResult(msg);
+      html += renderToolResult(msg);
     } else {
-      // Render with thinking/reasoning support (same as main chat)
-      let html = '';
-      const reasoning = msg.reasoning_content;
-      if (reasoning) {
-        html += renderThinkingBlock(reasoning, agentData.active && msg === msgs[msgs.length - 1]);
-      }
       const textContent = msg.content || '';
       const thinkMatch = textContent.match(/<think>([\s\S]*?)(<\/think>|$)/);
       if (thinkMatch) {
@@ -1160,17 +1205,15 @@ function renderSubAgentPanel(panel, agentData, name) {
       } else {
         html += renderMarkdown(textContent);
       }
-      content.innerHTML = html;
     }
+    content.innerHTML = html;
 
     div.appendChild(label);
     div.appendChild(content);
     scrollContainer.appendChild(div);
   }
 
-  panel.appendChild(scrollContainer);
-
-  // Auto-scroll
+  // 6. Final scroll
   scrollContainer.scrollTop = scrollContainer.scrollHeight;
 }
 
@@ -1364,6 +1407,15 @@ function updateContextBar(barEl, msgs) {
   }
 }
 
+function getLastWords(text, count) {
+  if (!text) return '';
+  // Remove markdown syntax for cleaner activity display
+  const clean = text.replace(/[#*`_\[\]()]/g, ' ').replace(/\s+/g, ' ').trim();
+  const words = clean.split(' ');
+  if (words.length <= count) return clean;
+  return '... ' + words.slice(-count).join(' ');
+}
+
 // ── Utilities ────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
@@ -1521,6 +1573,14 @@ function getGenerateCfg() {
   if ($('#setting-frequency-penalty')) cfg.frequency_penalty = parseFloat($('#setting-frequency-penalty').value);
   if ($('#setting-max-tokens')) cfg.max_tokens = parseInt($('#setting-max-tokens').value) || 2048;
   
+  if ($('#setting-mcp-servers') && $('#setting-mcp-servers').value.trim()) {
+    try {
+      cfg.mcpServers = JSON.parse($('#setting-mcp-servers').value.trim());
+    } catch(e) {
+      console.warn('Invalid MCP Servers JSON:', e);
+    }
+  }
+
   if (typeof agentDisabledTools !== 'undefined') {
     cfg.disabled_tools = agentDisabledTools;
   }
@@ -1570,3 +1630,16 @@ function retryGeneration() {
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 connect();
+if ($('#apply-mcp-btn')) {
+  $('#apply-mcp-btn').addEventListener('click', () => {
+    saveSettings();
+    send({
+      type: 'update_config',
+      generate_cfg: getGenerateCfg()
+    });
+    $('#apply-mcp-btn').textContent = 'Applying...';
+    setTimeout(() => {
+      $('#apply-mcp-btn').textContent = 'Apply MCP Config';
+    }, 2000);
+  });
+}

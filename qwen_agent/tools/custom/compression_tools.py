@@ -1,7 +1,10 @@
 import json
+import logging
 from typing import List, Union
 from qwen_agent.tools.base import BaseTool, register_tool
 from qwen_agent.llm.schema import SYSTEM, USER, Message, FUNCTION
+
+logger = logging.getLogger(__name__)
 
 @register_tool('compress_context', allow_overwrite=True)
 class CompressContext(BaseTool):

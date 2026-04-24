@@ -1,35 +1,4 @@
-[TIP] Type in this terminal to inject messages into the active agent.
-==================================================
-2026-04-24 03:49:06,594 - base.py - 794 - INFO - ALL tokens: 12, Available tokens: 63691
-Traceback (most recent call last):
-  File "n:\work\WD\Qwen-Agent\api_server.py", line 278, in run_agent_thread
-    for partial in agent_runner.run(history_for_agent):
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\agent.py", line 124, in run
-    for rsp in self._run(messages=new_messages, **kwargs):
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\agent_orchestrator.py", line 1027, in _run
-    for output in output_stream:
-                  ^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 409, in _convert_messages_iterator_to_target_type
-    for messages in messages_iter:
-                    ^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 287, in _format_and_cache
-    for o in output:
-             ^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 393, in _postprocess_messages_iterator
-    for pre_msg in messages:
-                   ^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\base.py", line 845, in retry_model_service_iterator
-    for rsp in it_fn():
-               ^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\oai.py", line 182, in _chat_stream
-    response = self._chat_complete_create(model=local_model, messages=messages, stream=True, **generate_cfg)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "n:\work\WD\Qwen-Agent\qwen_agent\llm\oai.py", line 86, in _chat_complete_create
-    return client.chat.completions.create(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Python312\Lib\site-packages\openai\_utils\_utils.py", line 286, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-TypeError: Completions.create() got an unexpected keyword argument 'disabled_tools'
+![image/png](iVBOR.....rOznJyx
+
+[TOOL RESPONSE TRUNCATED — Context at 1% capacity (922/63362 tokens). Full output (195018 chars) saved to: workspace\logs\Maine_playwright-screenshot_20260424_093150.txt
+You can read it with read_file if needed. Consider compressing context before continuing.]

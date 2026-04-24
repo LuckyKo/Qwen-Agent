@@ -226,6 +226,10 @@ def create_app(agents, agent_pool, config=None):
                 for i, a in enumerate(agents)
             ],
         }
+        if generating:
+            orch_tools = st['agents'][0]['tools'] if st['agents'] else []
+            print(f"[DEBUG] build_state: orchestrator tools count={len(orch_tools)}")
+        return st
 
     async def broadcast(data):
         """Send JSON to all connected WebSocket clients."""
@@ -269,10 +273,32 @@ def create_app(agents, agent_pool, config=None):
                 ui_cfg['repeat_penalty'] = pen
                 ui_cfg['repeatPenalty'] = pen
 
+            # Strip non-sampling params before updating LLM config
+            mcp_servers = ui_cfg.pop('mcpServers', None)
+            disabled_tools = ui_cfg.pop('disabled_tools', None)
+
             has_llm = hasattr(agent_runner, 'llm') and agent_runner.llm
             if has_llm:
                 old_cfg = copy.deepcopy(agent_runner.llm.generate_cfg)
+                # Clear potentially stale non-sampling params from persistent agent
+                agent_runner.llm.generate_cfg.pop('mcpServers', None)
+                agent_runner.llm.generate_cfg.pop('disabled_tools', None)
                 agent_runner.llm.generate_cfg.update(ui_cfg)
+
+            mcp_tools_added = []
+            if mcp_servers:
+                try:
+                    from qwen_agent.tools.mcp_manager import MCPManager
+                    mcp_tools = MCPManager().initConfig({'mcpServers': mcp_servers})
+                    for tool in mcp_tools:
+                        for agent_inst in agents:
+                            if tool.name not in agent_inst.function_map:
+                                agent_inst.function_map[tool.name] = tool
+                        mcp_tools_added.append(tool.name)
+                    print(f"[MCP] Successfully loaded {len(mcp_tools)} tools: {mcp_tools_added}")
+                except Exception as e:
+                    print(f"[MCP] Failed to initialize MCP tools: {e}")
+                    traceback.print_exc()
 
             try:
                 for partial in agent_runner.run(history_for_agent):
@@ -558,6 +584,24 @@ def create_app(agents, agent_pool, config=None):
                         agent_pool.stopped = True
                         agent_pool.reset()
                     await broadcast({'type': 'done', **build_state()})
+
+                elif msg_type == 'update_config':
+                    if 'generate_cfg' in data:
+                        session['generate_cfg'] = data['generate_cfg']
+                        ui_cfg = data['generate_cfg']
+                        if 'mcpServers' in ui_cfg:
+                            mcp_servers = ui_cfg['mcpServers']
+                            try:
+                                from qwen_agent.tools.mcp_manager import MCPManager
+                                mcp_tools = MCPManager().initConfig({'mcpServers': mcp_servers})
+                                for tool in mcp_tools:
+                                    for agent_inst in agents:
+                                        if tool.name not in agent_inst.function_map:
+                                            agent_inst.function_map[tool.name] = tool
+                                print(f"[MCP] Eagerly loaded {len(mcp_tools)} tools.")
+                            except Exception as e:
+                                print(f"[MCP] Eager initialization failed: {e}")
+                    await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'approve':
                     rid = data.get('request_id')

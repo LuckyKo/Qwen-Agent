@@ -204,9 +204,9 @@ class OrchestratorAgent(Assistant):
             
         if tool_name in ['compress_context']:
             return tool_result
-        
+
         max_tokens = self._get_max_tokens()
-        
+
         # Mirror base.py token accounting: separate system vs non-system
         from qwen_agent.utils.tokenization_qwen import count_tokens
         system_tokens = 0
@@ -218,14 +218,17 @@ class OrchestratorAgent(Assistant):
                 system_tokens += tokens
             else:
                 non_system_tokens += tokens
-        
+
         available_tokens = max_tokens - system_tokens
         if available_tokens <= 0:
             available_tokens = max_tokens  # fallback if system prompt is huge
-        
+
         threshold = int(available_tokens * 0.95)
-        
-        # Estimate token count of the result (conservative: ~3 chars/token)
+
+        # Inline image content (e.g. from screenshot): ![image/png](iVBOR...) — skip truncation since it's already compact markdown data, not prose the LLM parses as text tokens.
+        if '![image/' in tool_result:
+            return tool_result
+
         result_tokens = max(1, len(tool_result) // 3)
         
         if non_system_tokens + result_tokens <= threshold:

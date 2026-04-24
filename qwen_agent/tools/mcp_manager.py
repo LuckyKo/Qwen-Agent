@@ -271,7 +271,12 @@ class MCPManager:
             client_id = register_client_id
 
             def call(self, params: Union[str, dict], **kwargs) -> str:
-                tool_args = json.loads(params)
+                if isinstance(params, (str, bytes)):
+                    tool_args = json.loads(params)
+                elif isinstance(params, dict):
+                    tool_args = params
+                else:
+                    tool_args = json.loads(params)
                 # Submit coroutine to the event loop and wait for the result
                 manager = MCPManager()
                 client = manager.clients[self.client_id]
@@ -455,6 +460,11 @@ class MCPClient:
             for content in response.content:
                 if content.type == 'text':
                     texts.append(content.text)
+                elif content.type == 'image':
+                    # MCP SDK returns image as ImageContent with base64 data + mimeType
+                    texts.append(
+                        f'![{content.mimeType or "image"}]({content.data})'
+                    )
             if texts:
                 return '\n\n'.join(texts)
             else:

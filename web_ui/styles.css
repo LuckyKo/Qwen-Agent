@@ -272,19 +272,52 @@ body {
   overflow-wrap: break-word;
 }
 
+/* Unified markdown styles for both message types */
+.msg-content p,
 .sub-msg-content p {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
 }
 
+.msg-content p:last-child,
 .sub-msg-content p:last-child {
   margin-bottom: 0;
 }
 
-.sub-msg-content pre {
-  font-size: 12px;
+.msg-content ul,
+.msg-content ol,
+.sub-msg-content ul,
+.sub-msg-content ol {
+  margin: 4px 0 8px 20px;
 }
 
-/* Inherit markdown styles for sub-agent content */
+.msg-content li,
+.sub-msg-content li {
+  margin: 2px 0;
+}
+
+.msg-content strong,
+.sub-msg-content strong {
+  font-weight: 600;
+}
+
+.msg-content em,
+.sub-msg-content em {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+.msg-content a,
+.sub-msg-content a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.msg-content a:hover,
+.sub-msg-content a:hover {
+  text-decoration: underline;
+}
+
+.msg-content code,
 .sub-msg-content code {
   background: var(--bg-primary);
   padding: 2px 5px;
@@ -293,16 +326,60 @@ body {
   font-size: 12.5px;
 }
 
+.msg-content pre,
+.sub-msg-content pre {
+  background: var(--bg-primary);
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  margin: 8px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg-content pre code,
 .sub-msg-content pre code {
   background: none;
   padding: 0;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
+.msg-content blockquote,
 .sub-msg-content blockquote {
   border-left: 3px solid var(--accent-dim);
   padding-left: 12px;
   color: var(--text-secondary);
   margin: 8px 0;
+}
+
+.msg-content table,
+.sub-msg-content table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+}
+
+.msg-content th,
+.sub-msg-content th,
+.msg-content td,
+.sub-msg-content td {
+  padding: 6px 12px;
+  border: 1px solid var(--bg-elevated);
+  text-align: left;
+}
+
+.msg-content th,
+.sub-msg-content th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+.msg-content hr,
+.sub-msg-content hr {
+  border: none;
+  border-top: 1px solid var(--bg-elevated);
+  margin: 12px 0;
 }
 
 .main {
@@ -427,6 +504,59 @@ body {
   flex: 1;
   overflow-y: auto;
   scroll-behavior: smooth;
+  min-height: 0;
+}
+
+.sub-agent-activity-bar {
+  padding: 8px 16px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--accent-dim);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  min-height: 40px;
+  z-index: 10;
+  box-shadow: 0 -2px 8px rgba(0,0,0,0.2);
+}
+
+.activity-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.active .activity-dot {
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+  animation: activity-pulse 1s ease-in-out infinite;
+}
+
+.activity-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--accent);
+  font-style: italic;
+}
+
+@keyframes activity-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.8); }
 }
 
 /* ─── Right Panel ─────────────────────────────────────────────────────────── */
@@ -790,94 +920,7 @@ body {
 }
 
 /* Markdown inside messages */
-.msg-content p {
-  margin: 0 0 8px;
-}
-
-.msg-content p:last-child {
-  margin-bottom: 0;
-}
-
-.msg-content ul,
-.msg-content ol {
-  margin: 4px 0 8px 20px;
-}
-
-.msg-content li {
-  margin: 2px 0;
-}
-
-.msg-content strong {
-  font-weight: 600;
-}
-
-.msg-content em {
-  font-style: italic;
-  color: var(--text-secondary);
-}
-
-.msg-content a {
-  color: var(--accent);
-  text-decoration: none;
-}
-
-.msg-content a:hover {
-  text-decoration: underline;
-}
-
-.msg-content code {
-  background: var(--bg-primary);
-  padding: 2px 5px;
-  border-radius: 3px;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-}
-
-.msg-content pre {
-  background: var(--bg-primary);
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  overflow-x: auto;
-  margin: 8px 0;
-}
-
-.msg-content pre code {
-  background: none;
-  padding: 0;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.msg-content blockquote {
-  border-left: 3px solid var(--accent-dim);
-  padding-left: 12px;
-  color: var(--text-secondary);
-  margin: 8px 0;
-}
-
-.msg-content table {
-  border-collapse: collapse;
-  margin: 8px 0;
-  width: 100%;
-}
-
-.msg-content th,
-.msg-content td {
-  padding: 6px 12px;
-  border: 1px solid var(--bg-elevated);
-  text-align: left;
-}
-
-.msg-content th {
-  background: var(--bg-tertiary);
-  font-weight: 600;
-}
-
-.msg-content hr {
-  border: none;
-  border-top: 1px solid var(--bg-elevated);
-  margin: 12px 0;
-}
+/* Existing msg-content styles are now handled by unified blocks above */
 
 /* ─── Tool calls & results ────────────────────────────────────────────────── */
 
@@ -911,6 +954,8 @@ body {
   font-size: 12px;
   max-height: 400px;
   overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .truncation-hint {
@@ -923,7 +968,7 @@ body {
 /* ─── Thinking blocks ─────────────────────────────────────────────────────── */
 
 .thinking-block {
-  margin: 6px 0;
+  margin: 8px 0 8px 12px;
   border: 1px solid var(--thinking-border);
   border-radius: var(--radius-sm);
   background: var(--thinking-bg);
