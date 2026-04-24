@@ -1622,3 +1622,29 @@ body {
   background: var(--accent);
   color: #000;
 }
+
+/* ─── Context Bar ─────────────────────────────────────────────────────────── */
+
+.context-bar {
+  height: 3px;
+  background: var(--bg-elevated);
+  width: 100%;
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.context-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.context-bar-fill.warning {
+  background: #f1c40f;
+}
+
+.context-bar-fill.danger {
+  background: var(--danger);
+}

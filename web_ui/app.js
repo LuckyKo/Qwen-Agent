@@ -64,6 +64,10 @@ const statusGenInfo = $('#status-gen-info');
 const settingFontSize = $('#setting-font-size');
 const valFontSize = $('#val-font-size');
 const settingLinesEnabled = $('#setting-lines-enabled');
+const settingMaxContext = $('#setting-max-context');
+const settingMaxTokens = $('#setting-max-tokens');
+const settingSoundIntervention = $('#setting-sound-intervention');
+const settingSoundCompleted = $('#setting-sound-completed');
 
 const settingUserColor = $('#setting-user-color');
 const settingAssistantColor = $('#setting-assistant-color');
@@ -213,6 +217,13 @@ if (settingLinesEnabled) {
   });
 }
 
+if (settingMaxContext) {
+  settingMaxContext.addEventListener('change', () => {
+    renderMessages();
+    renderSubAgents();
+  });
+}
+
 // Appearance colors
 if (settingUserColor) {
   settingUserColor.addEventListener('input', (e) => {
@@ -253,11 +264,15 @@ function saveSettings() {
     if (r.input) s[r.input.id] = r.input.value;
   });
   if (settingLinesEnabled) s['setting-lines-enabled'] = settingLinesEnabled.checked;
+  if (settingSoundIntervention) s['setting-sound-intervention'] = settingSoundIntervention.checked;
+  if (settingSoundCompleted) s['setting-sound-completed'] = settingSoundCompleted.checked;
   if (settingTruncateTools) s['setting-truncate-tools'] = settingTruncateTools.checked;
   if (settingUserColor) s['setting-user-color'] = settingUserColor.value;
   if (settingAssistantColor) s['setting-assistant-color'] = settingAssistantColor.value;
   if (settingRawEditColor) s['setting-raw-edit-color'] = settingRawEditColor.value;
   if (settingFontSize) s['setting-font-size'] = settingFontSize.value;
+  if (settingMaxContext) s['setting-max-context'] = settingMaxContext.value;
+  if (settingMaxTokens) s['setting-max-tokens'] = settingMaxTokens.value;
   
   if (settingVisionEnabled) s['setting-vision-enabled'] = settingVisionEnabled.checked;
   if (settingImageDetail) s['setting-image-detail'] = settingImageDetail.value;
@@ -284,9 +299,27 @@ function loadSettings() {
       settingFontSize.dispatchEvent(new Event('input'));
     }
 
+    if (settingMaxTokens && s['setting-max-tokens'] !== undefined) {
+      settingMaxTokens.value = s['setting-max-tokens'];
+      settingMaxTokens.dispatchEvent(new Event('input'));
+    }
+
+    if (settingMaxContext && s['setting-max-context'] !== undefined) {
+      settingMaxContext.value = s['setting-max-context'];
+      settingMaxContext.dispatchEvent(new Event('input'));
+    }
+
     if (settingLinesEnabled && s['setting-lines-enabled'] !== undefined) {
       settingLinesEnabled.checked = s['setting-lines-enabled'];
       settingLinesEnabled.dispatchEvent(new Event('change'));
+    }
+
+    if (settingSoundIntervention && s['setting-sound-intervention'] !== undefined) {
+      settingSoundIntervention.checked = s['setting-sound-intervention'];
+    }
+
+    if (settingSoundCompleted && s['setting-sound-completed'] !== undefined) {
+      settingSoundCompleted.checked = s['setting-sound-completed'];
     }
 
     if (settingTruncateTools && s['setting-truncate-tools'] !== undefined) {
@@ -381,9 +414,58 @@ function send(obj) {
   }
 }
 
+// ── Audio Context ────────────────────────────────────────────────────────────
+
+let audioCtx = null;
+
+function playSound(type) {
+  try {
+    if (!audioCtx) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      audioCtx = new AudioContext();
+    }
+    
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+    
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
+    if (type === 'intervention' && settingSoundIntervention && settingSoundIntervention.checked) {
+      // Alert sound: two short high pitched beeps
+      oscillator.type = 'square';
+      oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
+      oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime + 0.1);
+      gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.2);
+    } else if (type === 'completed' && settingSoundCompleted && settingSoundCompleted.checked) {
+      // Success sound: low to high
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.15);
+      gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.15);
+    }
+  } catch (e) {
+    console.warn("Could not play sound:", e);
+  }
+}
+
 // ── Server message handlers ──────────────────────────────────────────────────
 
 function handleServerMessage(data) {
+  const wasGenerating = state.generating;
+  const prevApprovalsCount = (state.approvals || []).length;
+
   switch (data.type) {
     case 'state':
     case 'done':
@@ -418,6 +500,14 @@ function handleServerMessage(data) {
       updateControls();
       break;
   }
+  
+  // Trigger sounds based on state changes
+  const newApprovalsCount = (state.approvals || []).length;
+  if (newApprovalsCount > prevApprovalsCount) {
+    playSound('intervention');
+  } else if (wasGenerating && !state.generating) {
+    playSound('completed');
+  }
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
@@ -425,6 +515,8 @@ function handleServerMessage(data) {
 function renderMessages() {
   const msgs = state.messages;
   const container = messagesEl;
+  
+  updateContextBar(document.getElementById('chatContextFill'), msgs);
 
   // Calculate word count and token estimation for Status Bar
   if (statusWords || statusTokens) {
@@ -989,26 +1081,46 @@ function renderSubAgents() {
       panel = document.createElement('div');
       panel.className = 'main-tab-panel sub-agent-panel';
       panel.id = 'panelSub-' + name;
+
+      const contextBar = document.createElement('div');
+      contextBar.className = 'context-bar';
+      contextBar.title = 'Context Usage';
+      const contextFill = document.createElement('div');
+      contextFill.className = 'context-bar-fill';
+      contextFill.id = 'subContextFill-' + name;
+      contextBar.appendChild(contextFill);
+      panel.appendChild(contextBar);
+
       mainTabPanels.appendChild(panel);
     }
 
     // Render sub-agent messages into the panel
-    renderSubAgentPanel(panel, sa[name]);
+    renderSubAgentPanel(panel, sa[name], name);
   }
 }
 
-function renderSubAgentPanel(panel, agentData) {
+function renderSubAgentPanel(panel, agentData, name) {
   const msgs = agentData.messages || [];
+  
+  const fillEl = document.getElementById('subContextFill-' + name);
+  if (fillEl) {
+    updateContextBar(fillEl, msgs);
+  }
+
   // Only re-render if content changed (include reasoning_content in key)
   const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
   const contentKey = msgs.length + ':' + (lastMsg ? (lastMsg.content || '').length : 0) + ':' + (lastMsg ? (lastMsg.reasoning_content || '').length : 0);
   if (panel.dataset.contentKey === contentKey) return;
   panel.dataset.contentKey = contentKey;
 
-  panel.innerHTML = '';
-
-  const scrollContainer = document.createElement('div');
-  scrollContainer.className = 'sub-agent-messages';
+  let scrollContainer = panel.querySelector('.sub-agent-messages');
+  if (!scrollContainer) {
+    scrollContainer = document.createElement('div');
+    scrollContainer.className = 'sub-agent-messages';
+    panel.appendChild(scrollContainer);
+  }
+  
+  scrollContainer.innerHTML = '';
 
   for (const msg of msgs) {
     if (msg.role === 'system') continue;
@@ -1232,6 +1344,24 @@ function estimateTokens(text) {
   // Prose estimation: modern tokenizer ratios (LLaMA/Mistral)
   // roughly average 1 token ≈ 4.86 characters
   return Math.ceil(cleanedText.length / 4.86) + imageTokens;
+}
+
+function updateContextBar(barEl, msgs) {
+  if (!barEl) return;
+  const allText = msgs.map(m => (m.content || '') + (m.function_call ? JSON.stringify(m.function_call) : '') + (m.reasoning_content || '')).join(' ').trim();
+  const tokens = estimateTokens(allText);
+  const maxContext = settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768;
+  const pct = Math.min(100, Math.max(0, (tokens / maxContext) * 100));
+  barEl.style.width = pct + '%';
+  barEl.title = `${tokens} / ${maxContext} tokens`;
+  
+  if (pct > 90) {
+    barEl.className = 'context-bar-fill danger';
+  } else if (pct > 75) {
+    barEl.className = 'context-bar-fill warning';
+  } else {
+    barEl.className = 'context-bar-fill';
+  }
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────────

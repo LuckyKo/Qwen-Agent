@@ -45,7 +45,9 @@ CALL_AGENT_SCHEMA = {
     'description': (
         'Delegate a task to a specialized sub-agent. '
         'If the instance_name already exists, the session continues with the existing context. '
-        'Otherwise, a new session is started using the specified agent_class.'
+        'Otherwise, a new session is started using the specified agent_class.\n\n'
+        'Example usage:\n'
+        '{"name": "call_agent", "arguments": {"agent_class": "coder", "instance_name": "worker1", "task": "Write a script"}}'
     ),
     'parameters': {
         'type': 'object',

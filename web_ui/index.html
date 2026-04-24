@@ -108,6 +108,7 @@
         <div class="main-tab-panels">
           <!-- Chat panel (default) -->
           <div class="main-tab-panel active" id="panelChat">
+            <div class="context-bar" title="Context Usage"><div class="context-bar-fill" id="chatContextFill" style="width: 0%;"></div></div>
             <div class="messages" id="messages"></div>
 
             <!-- Approval inline area -->
@@ -210,6 +211,10 @@
                   <span>Max Tokens</span>
                   <input type="number" id="setting-max-tokens" min="1" max="32768" value="2048" />
                 </label>
+                <label class="setting-field">
+                  <span>Context Size (Tokens)</span>
+                  <input type="number" id="setting-max-context" min="1024" max="1000000" value="32768" />
+                </label>
               </div>
             </div>
 
@@ -236,9 +241,9 @@
               </div>
             </div>
 
-            <!-- Appearance -->
+            <!-- Appearance & Audio -->
             <div class="settings-section">
-              <h3 class="settings-section-title">Appearance</h3>
+              <h3 class="settings-section-title">Appearance & Audio</h3>
               <div class="settings-section-body">
                 <label class="setting-field toggle-field">
                   <span>Show Line Numbers</span>
@@ -247,6 +252,14 @@
                 <label class="setting-field toggle-field">
                   <span>Truncate Tool Output</span>
                   <input type="checkbox" id="setting-truncate-tools" checked />
+                </label>
+                <label class="setting-field toggle-field">
+                  <span>Sound: User Intervention</span>
+                  <input type="checkbox" id="setting-sound-intervention" checked />
+                </label>
+                <label class="setting-field toggle-field">
+                  <span>Sound: Task Completed</span>
+                  <input type="checkbox" id="setting-sound-completed" checked />
                 </label>
                 <label class="setting-field">
                   <span>User Message Color</span>

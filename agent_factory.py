@@ -202,5 +202,8 @@ Tools:
 - call_agent: Delegate tasks to a specialized sub-agent
 - dismiss_agent: Clear a sub-agent's conversation context
 - list_agents: Show available sub-agents
+
+Example of delegating a task:
+{"name": "call_agent", "arguments": {"agent_class": "coder", "instance_name": "worker1", "task": "Write a script"}}
 """
     return prompt
