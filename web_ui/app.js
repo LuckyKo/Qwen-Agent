@@ -17,6 +17,12 @@ marked.setOptions({
   },
 });
 
+// ── Constants ────────────────────────────────────────────────────────────────
+const USER = 'user';
+const ASSISTANT = 'assistant';
+const SYSTEM = 'system';
+const FUNCTION = 'function';
+
 // ── State ────────────────────────────────────────────────────────────────────
 const state = {
   messages: [],
@@ -26,10 +32,20 @@ const state = {
   generating: false,
   agents: [],
   agentIndex: 0,
-  sessionName: 'Maine',
+  sessionName: localStorage.getItem('qwen-session-name') || 'Maine',
   connected: false,
   editingIndex: null,  // Which message index is being edited
   activeSubTab: null,
+  genStats: {
+    startTime: 0,
+    firstTokenTime: 0,
+    tokenCount: 0,
+    lastContentLength: 0,
+    active: false,
+  },
+  totalTokens: 0,
+  totalWords: 0,
+  maxTokens: 32768,
 };
 
 let ws = null;
@@ -62,6 +78,8 @@ const statusWords = $('#status-words');
 const statusTokens = $('#status-tokens');
 const statusTokensSec = $('#status-tokens-sec');
 const statusGenInfo = $('#status-gen-info');
+const statusModel = $('#status-model');
+const statusSave = $('#status-save');
 const settingFontSize = $('#setting-font-size');
 const valFontSize = $('#val-font-size');
 const settingLinesEnabled = $('#setting-lines-enabled');
@@ -287,6 +305,7 @@ function saveSettings() {
   if ($('#setting-max-turns')) s['max-turns'] = $('#setting-max-turns').value;
   if ($('#setting-auto-continue')) s['auto-continue'] = $('#setting-auto-continue').checked;
   if ($('#setting-read-file-limit')) s['read-file-limit'] = $('#setting-read-file-limit').value;
+  if (settingVisionEnabled) s['vision-enabled'] = settingVisionEnabled.checked;
 
   localStorage.setItem('qwen-settings', JSON.stringify(s));
 }
@@ -395,13 +414,17 @@ function connect() {
     connectionDot.classList.add('connected');
     connectionDot.title = 'Connected';
     statusText.textContent = '';
+    if (statusSave) statusSave.textContent = 'Connected';
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    // Sync session name with server on connect
+    send({ type: 'set_session_name', name: state.sessionName });
   };
 
   ws.onclose = () => {
     state.connected = false;
     connectionDot.classList.remove('connected');
     connectionDot.title = 'Disconnected';
+    if (statusSave) statusSave.textContent = 'Disconnected';
     statusText.textContent = 'Disconnected — reconnecting...';
     scheduleReconnect();
   };
@@ -503,9 +526,27 @@ function handleServerMessage(data) {
         state.approvals = data.approvals;
         renderApprovals();
       }
+      
+      if (data.total_tokens !== undefined) state.totalTokens = data.total_tokens;
+      if (data.total_words !== undefined) state.totalWords = data.total_words;
+      if (data.max_tokens !== undefined) state.maxTokens = data.max_tokens;
+
+      if (data.current_model && statusModel) {
+        statusModel.textContent = data.current_model;
+      }
+
       renderMessages();
       renderSubAgents();
       updateControls();
+
+      // Update stats if generating
+      if (state.generating) {
+        updateGenStats(state.messages);
+      } else if (wasGenerating) {
+        // Final update for stats
+        updateGenStats(state.messages, true);
+        state.genStats.active = false;
+      }
       break;
 
     case 'approvals':
@@ -535,18 +576,14 @@ function renderMessages() {
   const msgs = state.messages;
   const container = messagesEl;
   
-  updateContextBar(document.getElementById('chatContextFill'), msgs);
+  updateContextBar(document.getElementById('chatContextFill'), msgs, state.totalTokens, state.maxTokens);
 
-  // Calculate word count and token estimation for Status Bar
-  if (statusWords || statusTokens) {
-    const allText = msgs.map(m => (m.content || '') + (m.function_call ? JSON.stringify(m.function_call) : '') + (m.reasoning_content || '')).join(' ').trim();
-    if (statusWords) {
-      const words = allText ? allText.split(/\s+/).length : 0;
-      statusWords.textContent = `${words} words`;
-    }
-    if (statusTokens) {
-      statusTokens.textContent = `${estimateTokens(allText)} tokens`;
-    }
+  // Word count and token estimation from Backend
+  if (statusWords) {
+    statusWords.textContent = `${state.totalWords} words`;
+  }
+  if (statusTokens) {
+    statusTokens.textContent = `${state.totalTokens} tokens`;
   }
 
   // Quick check: if nothing meaningful changed, skip heavy re-render
@@ -570,6 +607,9 @@ function renderMessages() {
     lastRenderedCount = currentCount;
   }
 
+  // Auto-scroll logic: only scroll if was at bottom before update
+  const wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
+
   // Update last message content (streaming)
   if (lastContent !== lastLastContent && container.lastElementChild) {
     const lastBubble = container.lastElementChild;
@@ -580,8 +620,9 @@ function renderMessages() {
   }
   lastLastContent = lastContent;
 
-  // Auto-scroll
-  scrollToBottom();
+  if (wasAtBottom) {
+    scrollToBottom();
+  }
 
   // Update main activity bar
   updateMainActivityBar();
@@ -768,7 +809,21 @@ function updateBubbleContent(bubble, msg) {
       html += renderMarkdown(text);
     }
   }
-  contentDiv.innerHTML = html;
+  setInnerHtmlWithState(contentDiv, html);
+}
+
+function setInnerHtmlWithState(el, html) {
+  const details = el.querySelectorAll('details');
+  const states = Array.from(details).map(d => d.open);
+  
+  el.innerHTML = html;
+  
+  const newDetails = el.querySelectorAll('details');
+  newDetails.forEach((d, i) => {
+    if (i < states.length) {
+      d.open = states[i];
+    }
+  });
 }
 
 function renderMarkdown(text) {
@@ -1209,7 +1264,7 @@ function renderSubAgentPanel(panel, agentData, name) {
   
   const fillEl = document.getElementById('subContextFill-' + name);
   if (fillEl) {
-    updateContextBar(fillEl, msgs);
+  updateContextBar(fillEl, msgs, agentData.total_tokens, agentData.max_tokens);
   }
 
   // 1. Ensure scroll container exists
@@ -1231,9 +1286,19 @@ function renderSubAgentPanel(panel, agentData, name) {
         <span>Activity</span>
       </div>
       <div class="activity-text">Idle</div>
+      <button class="btn btn-danger btn-sm terminate-btn" style="margin-left: auto; display: none; padding: 2px 8px; font-size: 11px;">Terminate</button>
     `;
     panel.appendChild(activityBar);
   }
+  
+  const terminateBtn = activityBar.querySelector('.terminate-btn');
+  terminateBtn.onclick = () => {
+    if (confirm(`Terminate agent "${name}" and return focus?`)) {
+      send({ type: 'terminate_sub_agent', instance_name: name });
+      // Return focus to main chat tab
+      switchTab('chat');
+    }
+  };
 
   // 3. Ensure input area is present and correctly ordered
   let inputArea = panel.querySelector('.input-area');
@@ -1289,70 +1354,102 @@ function renderSubAgentPanel(panel, agentData, name) {
     } else {
       activityText.textContent = 'Agent Starting...';
     }
+    // Update sub-agent stats in activity bar
+    if (agentData.total_tokens !== undefined) {
+      activityText.textContent += ` (${agentData.total_words} words, ${agentData.total_tokens} tokens)`;
+    }
+    terminateBtn.style.display = 'block';
   } else {
     activityBar.classList.remove('active');
     activityText.textContent = 'Agent Idle';
+    terminateBtn.style.display = 'none';
   }
+
+  const wasAtBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 50;
 
   // 4. Only re-render messages if content changed
   const contentKey = msgs.length + ':' + (lastMsg ? (lastMsg.content || '').length : 0) + ':' + (lastMsg ? (lastMsg.reasoning_content || '').length : 0);
   if (panel.dataset.contentKey === contentKey) {
-    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    if (wasAtBottom) scrollContainer.scrollTop = scrollContainer.scrollHeight;
     return;
   }
   panel.dataset.contentKey = contentKey;
 
-  // 5. Render messages
-  scrollContainer.innerHTML = '';
-  for (const msg of msgs) {
-    if (msg.role === 'system') continue;
-    const div = document.createElement('div');
-    div.className = `sub-msg sub-msg-${msg.role || 'unknown'}`;
+  // 5. Render messages incrementally
+  const currentCount = msgs.length;
+  const lastCount = parseInt(panel.dataset.lastRenderedCount || '0');
 
-    const label = document.createElement('div');
-    label.className = 'sub-msg-label';
-    label.textContent = msg.role === 'user' ? '📤 Task' :
-      msg.role === 'function' ? `📋 ${msg.name || 'result'}` :
-        msg.name || 'Agent';
-
-    const content = document.createElement('div');
-    content.className = 'sub-msg-content';
-
-    let html = '';
-    const isGenerating = agentData.active && msg === msgs[msgs.length - 1];
-
-    if (msg.reasoning_content) {
-      html += renderThinkingBlock(msg.reasoning_content, isGenerating);
+  if (currentCount < lastCount || lastCount === 0) {
+    scrollContainer.innerHTML = '';
+    for (let i = 0; i < currentCount; i++) {
+      scrollContainer.appendChild(createSubMsgEl(msgs[i], agentData.active && i === currentCount - 1));
     }
-
-    if (msg.function_call) {
-      html += renderToolCall(msg);
-    } else if (msg.role === 'function') {
-      html += renderToolResult(msg);
-    } else {
-      const textContent = msg.content || '';
-      const thinkMatch = textContent.match(/<think>([\s\S]*?)(<\/think>|$)/);
-      if (thinkMatch) {
-        const thought = thinkMatch[1];
-        const isOpen = !textContent.includes('</think>');
-        const before = textContent.substring(0, textContent.indexOf('<think>'));
-        const after = textContent.includes('</think>') ? textContent.substring(textContent.indexOf('</think>') + 8) : '';
-        if (before.trim()) html += renderMarkdown(before);
-        html += renderThinkingBlock(thought, isOpen);
-        if (after.trim()) html += renderMarkdown(after);
-      } else {
-        html += renderMarkdown(textContent);
-      }
+  } else {
+    // Append new messages
+    for (let i = lastCount; i < currentCount; i++) {
+      scrollContainer.appendChild(createSubMsgEl(msgs[i], agentData.active && i === currentCount - 1));
     }
-    content.innerHTML = html;
-
-    div.appendChild(label);
-    div.appendChild(content);
-    scrollContainer.appendChild(div);
+    // Update the last message if it's still being generated
+    if (scrollContainer.lastElementChild) {
+      updateSubBubbleContent(scrollContainer.lastElementChild, msgs[currentCount - 1], agentData.active);
+    }
   }
+  panel.dataset.lastRenderedCount = currentCount;
 
   // 6. Final scroll
-  scrollContainer.scrollTop = scrollContainer.scrollHeight;
+  if (wasAtBottom) scrollContainer.scrollTop = scrollContainer.scrollHeight;
+}
+
+function createSubMsgEl(msg, isGenerating) {
+  const div = document.createElement('div');
+  div.className = `sub-msg sub-msg-${msg.role || 'unknown'}`;
+
+  const label = document.createElement('div');
+  label.className = 'sub-msg-label';
+  label.textContent = msg.role === 'user' ? '📤 Task' :
+    msg.role === 'function' ? `📋 ${msg.name || 'result'}` :
+      msg.name || 'Agent';
+
+  const content = document.createElement('div');
+  content.className = 'sub-msg-content';
+  
+  div.appendChild(label);
+  div.appendChild(content);
+  
+  updateSubBubbleContent(div, msg, isGenerating);
+  return div;
+}
+
+function updateSubBubbleContent(bubble, msg, isGenerating) {
+  const content = bubble.querySelector('.sub-msg-content');
+  if (!content) return;
+
+  let html = '';
+  if (msg.reasoning_content) {
+    html += renderThinkingBlock(msg.reasoning_content, isGenerating);
+  }
+
+  if (msg.function_call) {
+    html += renderToolCall(msg);
+  } else if (msg.role === 'function') {
+    html += renderToolResult(msg);
+  } else {
+    const textContent = msg.content || '';
+    const thinkMatch = textContent.match(/<think>([\s\S]*?)(<\/think>|$)/);
+    if (thinkMatch) {
+      const thought = thinkMatch[1];
+      const isOpen = !textContent.includes('</think>');
+      const before = textContent.substring(0, textContent.indexOf('<think>'));
+      const after = textContent.includes('</think>') ? textContent.substring(textContent.indexOf('</think>') + 8) : '';
+      if (before.trim()) html += renderMarkdown(before);
+      html += renderThinkingBlock(thought, isOpen);
+      if (after.trim()) html += renderMarkdown(after);
+    } else {
+      html += renderMarkdown(textContent);
+    }
+  }
+  
+  setInnerHtmlWithState(content, html);
 }
 
 function switchMainTab(tabId) {
@@ -1499,6 +1596,10 @@ function updateControls() {
   chatInput.placeholder = state.generating
     ? 'Inject a message into the active agent...'
     : 'Send a message...';
+
+  if (sessionNameInput && document.activeElement !== sessionNameInput) {
+    sessionNameInput.value = state.sessionName;
+  }
 }
 
 // ── Auto-resize textarea ─────────────────────────────────────────────────────
@@ -1536,11 +1637,21 @@ function estimateTokens(text) {
   return Math.ceil(cleanedText.length / 4.86) + imageTokens;
 }
 
-function updateContextBar(barEl, msgs) {
+function updateContextBar(barEl, msgs, overrideTokens, overrideMax) {
   if (!barEl) return;
-  const allText = msgs.map(m => (m.content || '') + (m.function_call ? JSON.stringify(m.function_call) : '') + (m.reasoning_content || '')).join(' ').trim();
-  const tokens = estimateTokens(allText);
-  const maxContext = settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768;
+  
+  let tokens;
+  let maxContext;
+  
+  if (overrideTokens !== undefined) {
+    tokens = overrideTokens;
+    maxContext = overrideMax || (settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768);
+  } else {
+    const allText = msgs.map(m => (m.content || '') + (m.function_call ? JSON.stringify(m.function_call) : '') + (m.reasoning_content || '')).join(' ').trim();
+    tokens = estimateTokens(allText);
+    maxContext = settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768;
+  }
+  
   const pct = Math.min(100, Math.max(0, (tokens / maxContext) * 100));
   barEl.style.width = pct + '%';
   barEl.title = `${tokens} / ${maxContext} tokens`;
@@ -1551,6 +1662,56 @@ function updateContextBar(barEl, msgs) {
     barEl.className = 'context-bar-fill warning';
   } else {
     barEl.className = 'context-bar-fill';
+  }
+}
+
+function resetGenStats() {
+  state.genStats = {
+    startTime: performance.now(),
+    firstTokenTime: 0,
+    tokenCount: 0,
+    lastContentLength: 0,
+    active: true,
+  };
+  if (statusTokensSec) statusTokensSec.textContent = '— t/s';
+  if (statusGenInfo) statusGenInfo.textContent = 'Starting...';
+}
+
+function updateGenStats(msgs, isFinal = false) {
+  if (!state.genStats.active) return;
+  if (!statusTokensSec || !statusGenInfo) return;
+
+  // Estimate total tokens generated in current session (sum of assistant/function messages)
+  const assistantText = msgs
+    .filter(m => m.role === ASSISTANT || m.role === FUNCTION)
+    .map(m => (m.content || '') + (m.reasoning_content || '') + (m.function_call ? JSON.stringify(m.function_call) : ''))
+    .join('');
+  
+  const currentTokens = estimateTokens(assistantText);
+  
+  if (currentTokens > state.genStats.tokenCount) {
+    if (state.genStats.firstTokenTime === 0) {
+      state.genStats.firstTokenTime = performance.now();
+    }
+    state.genStats.tokenCount = currentTokens;
+  }
+
+  const now = performance.now();
+  const totalTime = (now - state.genStats.startTime) / 1000;
+  
+  if (state.genStats.firstTokenTime > 0) {
+    const genTime = (now - state.genStats.firstTokenTime) / 1000;
+    const tps = genTime > 0 ? state.genStats.tokenCount / genTime : 0;
+    statusTokensSec.textContent = `${tps.toFixed(1)} t/s`;
+    
+    const ttft = (state.genStats.firstTokenTime - state.genStats.startTime) / 1000;
+    if (isFinal) {
+      statusGenInfo.textContent = `${state.genStats.tokenCount} tokens in ${totalTime.toFixed(1)}s (TPS: ${tps.toFixed(1)}, TTFT: ${ttft.toFixed(2)}s)`;
+    } else {
+      statusGenInfo.textContent = `Generating... ${state.genStats.tokenCount} tokens (${totalTime.toFixed(1)}s)`;
+    }
+  } else {
+    statusGenInfo.textContent = `Waiting for LLM... (${totalTime.toFixed(1)}s)`;
   }
 }
 
@@ -1707,6 +1868,7 @@ agentSelect.addEventListener('change', () => {
 
 sessionNameInput.addEventListener('change', () => {
   state.sessionName = sessionNameInput.value.trim() || 'Maine';
+  localStorage.setItem('qwen-session-name', state.sessionName);
   send({ type: 'set_session_name', name: state.sessionName });
 });
 
@@ -1724,6 +1886,7 @@ function getGenerateCfg() {
   if ($('#setting-presence-penalty')) cfg.presence_penalty = parseFloat($('#setting-presence-penalty').value);
   if ($('#setting-frequency-penalty')) cfg.frequency_penalty = parseFloat($('#setting-frequency-penalty').value);
   if ($('#setting-max-tokens')) cfg.max_tokens = parseInt($('#setting-max-tokens').value) || 2048;
+  if ($('#setting-max-context')) cfg.max_input_tokens = parseInt($('#setting-max-context').value) || 32768;
   
   if ($('#setting-max-turns')) cfg.max_turns = parseInt($('#setting-max-turns').value) || 50;
   if ($('#setting-auto-continue')) cfg.auto_continue = $('#setting-auto-continue').checked;
@@ -1769,6 +1932,7 @@ function sendMessage(inputEl) {
     return;
   }
 
+  resetGenStats();
   send({
     type: 'message',
     text,
@@ -1782,6 +1946,7 @@ function continueMessage() {
   if (state.generating) return;
   
   const text = "[SYSTEM]: Please continue.";
+  resetGenStats();
   send({
     type: 'message',
     text,
@@ -1793,6 +1958,7 @@ function continueMessage() {
 
 function retryGeneration() {
   if (state.generating) return;
+  resetGenStats();
   send({
     type: 'retry',
     agent_index: state.agentIndex,

@@ -1,4 +1,25 @@
-![image/png](iVBOR.....rOznJyx
-
-[TOOL RESPONSE TRUNCATED — Context at 1% capacity (922/63362 tokens). Full output (195018 chars) saved to: workspace\logs\Maine_playwright-screenshot_20260424_093150.txt
-You can read it with read_file if needed. Consider compressing context before continuing.]
+n:\work\WD\Qwen-Agent>python start_api_server.py
+Initializing Agent Orchestrator (API Server)...
+==================================================
+2026-04-25 03:58:13,419 - code_interpreter.py - 441 - INFO - Docker is available and running
+[OK] Loaded agent: coder
+2026-04-25 03:58:13,749 - code_interpreter.py - 441 - INFO - Docker is available and running
+[OK] Loaded agent: orchestrator
+2026-04-25 03:58:13,991 - code_interpreter.py - 441 - INFO - Docker is available and running
+[OK] Loaded agent: researcher
+2026-04-25 03:58:14,238 - code_interpreter.py - 441 - INFO - Docker is available and running
+[OK] Loaded agent: reviewer
+2026-04-25 03:58:14,485 - code_interpreter.py - 441 - INFO - Docker is available and running
+[OK] Loaded agent: writer
+2026-04-25 03:58:14,735 - code_interpreter.py - 441 - INFO - Docker is available and running
+2026-04-25 03:58:15,509 - code_interpreter.py - 441 - INFO - Docker is available and running
+[OK] Available agents: ['Orchestrator', 'Coder', 'Researcher', 'Reviewer', 'Writer']
+==================================================
+Traceback (most recent call last):
+  File "n:\work\WD\Qwen-Agent\start_api_server.py", line 202, in <module>
+    app = create_app(all_agents, agent_pool, chatbot_config)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "n:\work\WD\Qwen-Agent\api_server.py", line 175, in create_app
+    session['history'] = _load_session_history(default_session_name)
+                         ^^^^^^^^^^^^^^^^^^^^^
+UnboundLocalError: cannot access local variable '_load_session_history' where it is not associated with a value

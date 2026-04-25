@@ -104,6 +104,9 @@
           <!-- Sub-agent tabs injected here dynamically -->
         </div>
 
+        <!-- Approval inline area (Global) -->
+        <div class="approval-bar" id="approvalBar" style="display:none;"></div>
+
         <!-- Tab panels -->
         <div class="main-tab-panels">
           <!-- Chat panel (default) -->
@@ -111,8 +114,6 @@
             <div class="context-bar" title="Context Usage"><div class="context-bar-fill" id="chatContextFill" style="width: 0%;"></div></div>
             <div class="messages" id="messages"></div>
 
-            <!-- Approval inline area -->
-            <div class="approval-bar" id="approvalBar" style="display:none;"></div>
 
             <div class="input-area">
               <div class="input-wrapper">
@@ -222,7 +223,7 @@
                 </label>
                 <label class="setting-field">
                   <span>Context Size (Tokens)</span>
-                  <input type="number" id="setting-max-context" min="1024" max="1000000" value="32768" />
+                  <input type="number" id="setting-max-context" min="1024" max="1000000" value="65536" />
                 </label>
               </div>
             </div>

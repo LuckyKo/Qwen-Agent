@@ -57,6 +57,7 @@ class AgentPool:
         
         # Explicit stop flag for cancellation
         self.stopped = False
+        self.terminated_instances = set()
         
         # Async message queue for injecting user messages mid-generation
         self.async_message_queue: List[str] = []
@@ -64,6 +65,11 @@ class AgentPool:
         # Auto-load all agents from the agents directory
         self._discover_agents()
     
+    def terminate_instance(self, instance_name: str):
+        """Mark an instance for immediate termination and stop the execution loop."""
+        self.terminated_instances.add(instance_name)
+        self.stopped = True
+
     def get_logger(self, instance_name: str, agent_class: str, base_metadata: Optional[Dict] = None) -> AgentInstanceLogger:
         """Get or create a logger for an agent instance."""
         if instance_name not in self.instance_loggers:
@@ -160,6 +166,27 @@ rules:
     def get_agent(self, agent_name: str) -> Optional[Assistant]:
         """Get an agent by name."""
         return self.agents.get(agent_name)
+    
+    def update_llm_cfg(self, new_cfg: dict):
+        """Update the global LLM config and propagate it to all loaded agents."""
+        self.llm_cfg.update(new_cfg)
+        for agent_name, agent in self.agents.items():
+            if hasattr(agent, 'llm') and hasattr(agent.llm, 'generate_cfg'):
+                # Extract max_input_tokens if it's at the top level, consistent with BaseChatModel.__init__
+                update_data = copy.deepcopy(new_cfg)
+                if 'max_input_tokens' in update_data and 'max_input_tokens' not in update_data.get('generate_cfg', {}):
+                    if 'generate_cfg' not in update_data:
+                        update_data['generate_cfg'] = {}
+                    update_data['generate_cfg']['max_input_tokens'] = update_data['max_input_tokens']
+                
+                if 'generate_cfg' in update_data:
+                    agent.llm.generate_cfg.update(update_data['generate_cfg'])
+                
+                # Also update other relevant top-level attributes if necessary
+                for attr in ['model', 'model_type', 'api_key']:
+                    if attr in update_data:
+                        setattr(agent.llm, attr, update_data[attr])
+        logger.debug("Propagated LLM config changes to all active agents in the pool.")
     
     def list_agents(self) -> List[str]:
         """List all available agents."""

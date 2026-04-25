@@ -34,13 +34,15 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 from qwen_agent.llm.schema import (
     ASSISTANT, CONTENT, FUNCTION, NAME, REASONING_CONTENT,
     ROLE, SYSTEM, USER, Message,
 )
 from qwen_agent.log import logger
+from qwen_agent.utils.tokenization_qwen import count_tokens as qwen_count
+from qwen_agent.utils.utils import extract_text_from_message
 
 try:
     from qwen_agent.agents.user_agent import PENDING_USER_INPUT
@@ -72,6 +74,71 @@ def _parse_multimodal_content(text):
     if len(parts) == 1 and 'text' in parts[0]:
         return parts[0]['text']
     return parts
+    
+IMAGE_REGEX = re.compile(r'!\[(.*?)\]\(data:image/[^;]+;base64,[a-zA-Z0-9+/=]+\)')
+
+
+def get_message_stats(msg: Union[Message, dict]) -> dict:
+    """Return tokens and words for a message with consistency."""
+    if isinstance(msg, dict):
+        role = msg.get(ROLE, '')
+        function_call = msg.get('function_call')
+        if role == ASSISTANT and function_call:
+            text = f'{function_call}'
+            return {'tokens': qwen_count(text), 'words': len(text.split())}
+        msg_obj = Message(**msg)
+    else:
+        if msg.role == ASSISTANT and msg.function_call:
+            text = f'{msg.function_call}'
+            return {'tokens': qwen_count(text), 'words': len(text.split())}
+        msg_obj = msg
+
+    text = extract_text_from_message(msg_obj, add_upload_info=True)
+    image_tokens = 0
+    def repl(match):
+        nonlocal image_tokens
+        image_tokens += 255
+        return f"[Image: {match.group(1)}]"
+    
+    text_for_tokens = IMAGE_REGEX.sub(repl, text)
+    tokens = qwen_count(text_for_tokens) + image_tokens
+    words = len(text.split())
+    return {'tokens': tokens, 'words': words}
+
+
+def get_history_stats(messages: List[Union[Message, dict]]) -> dict:
+    """Calculate total tokens and words in a message list with caching."""
+    if not messages:
+        return {'tokens': 0, 'words': 0}
+    total_tokens = 0
+    total_words = 0
+    for m in messages:
+        if isinstance(m, dict):
+            if '_tokens' in m and '_words' in m:
+                total_tokens += m['_tokens']
+                total_words += m['_words']
+            else:
+                stats = get_message_stats(m)
+                m['_tokens'] = stats['tokens']
+                m['_words'] = stats['words']
+                total_tokens += stats['tokens']
+                total_words += stats['words']
+        else:
+            stats = get_message_stats(m)
+            total_tokens += stats['tokens']
+            total_words += stats['words']
+    return {'tokens': total_tokens, 'words': total_words}
+
+
+def get_agent_max_tokens(agent) -> int:
+    """Resolve the effective max_input_tokens from agent LLM config."""
+    from qwen_agent.settings import DEFAULT_MAX_INPUT_TOKENS
+    if hasattr(agent, 'llm') and hasattr(agent.llm, 'cfg'):
+        cfg = agent.llm.cfg
+        agent_max = cfg.get('generate_cfg', {}).get('max_input_tokens') or cfg.get('max_input_tokens')
+        if agent_max:
+            return int(agent_max)
+    return DEFAULT_MAX_INPUT_TOKENS
 
 
 # ─── Message serialization ────────────────────────────────────────────────────
@@ -161,20 +228,59 @@ def create_app(agents, agent_pool, config=None):
         allow_headers=["*"],
     )
 
+    # ── Helpers ───────────────────────────────────────────────────────────
+    def _save_session_history():
+        try:
+            name = session.get('session_name', 'Maine')
+            history = session.get('history', [])
+            log_dir = Path('workspace/logs')
+            log_dir.mkdir(parents=True, exist_ok=True)
+            path = log_dir / f"session_{name}.jsonl"
+            with open(path, 'w', encoding='utf-8') as f:
+                for msg in history:
+                    # Clean message for storage
+                    clean_msg = copy.deepcopy(msg)
+                    if ROLE not in clean_msg: continue
+                    f.write(json.dumps(clean_msg, ensure_ascii=False) + '\n')
+        except Exception as e:
+            logger.error(f"Failed to save session history: {e}")
+
+    def _load_session_history(name):
+        try:
+            log_dir = Path('workspace/logs')
+            path = log_dir / f"session_{name}.jsonl"
+            if path.exists():
+                new_history = []
+                with open(path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip():
+                            try:
+                                new_history.append(json.loads(line))
+                            except:
+                                pass
+                return new_history
+        except Exception as e:
+            logger.error(f"Failed to load session history: {e}")
+        return []
+
     # ── Shared session state ──────────────────────────────────────────────
+    default_session_name = config.get('session_name', 'Maine')
     session: Dict[str, Any] = {
-        'history': [],
+        'history': [], # Will be loaded below
         'agent_index': 0,
-        'session_name': config.get('session_name', 'Maine'),
+        'session_name': default_session_name,
         'generating': False,
         'stop_requested': False,
         'generation_id': 0,         # Increment on each run to prevent stale appends
     }
+    # Initial load
+    session['history'] = _load_session_history(default_session_name)
+
 
     ws_connections: Set[WebSocket] = set()
     send_queue: asyncio.Queue = asyncio.Queue()
 
-    # ── Helpers ───────────────────────────────────────────────────────────
+
 
     def get_agent():
         idx = session['agent_index']
@@ -187,10 +293,20 @@ def create_app(agents, agent_pool, config=None):
         if agent_pool and hasattr(agent_pool, 'sub_agent_state'):
             for name, state in agent_pool.sub_agent_state.items():
                 msgs = state.get('messages', [])
+                agent_class = state.get('agent_name', name)
+                
+                # Get max tokens for this agent class
+                agent_template = agent_pool.get_agent(agent_class)
+                max_tokens = get_agent_max_tokens(agent_template) if agent_template else 58000
+                
+                stats = get_history_stats(msgs)
                 result[name] = {
                     'active': state.get('active', False),
-                    'agent_name': state.get('agent_name', name),
+                    'agent_name': agent_class,
                     'messages': [serialize_message(m, i) for i, m in enumerate(msgs)],
+                    'total_tokens': stats['tokens'],
+                    'total_words': stats['words'],
+                    'max_tokens': max_tokens
                 }
         return result
 
@@ -210,6 +326,18 @@ def create_app(agents, agent_pool, config=None):
         if responses:
             msgs.extend(responses)
 
+        # Calculate tokens for the main session
+        orch_agent = get_agent()
+        
+        # Optimize: History stats are cached, partial responses are calculated on the fly
+        h_stats = get_history_stats(session['history'])
+        r_stats = get_history_stats(responses) if responses else {'tokens': 0, 'words': 0}
+        
+        total_tokens = h_stats['tokens'] + r_stats['tokens']
+        total_words = h_stats['words'] + r_stats['words']
+        
+        max_tokens = get_agent_max_tokens(orch_agent)
+
         return {
             'messages': [serialize_message(m, i) for i, m in enumerate(msgs)],
             'sub_agents': get_sub_agent_state(),
@@ -218,6 +346,9 @@ def create_app(agents, agent_pool, config=None):
             'generating': generating if generating is not None else session['generating'],
             'session_name': session['session_name'],
             'agent_index': session['agent_index'],
+            'total_tokens': total_tokens,
+            'total_words': total_words,
+            'max_tokens': max_tokens,
             'agents': [
                 {'name': getattr(a, 'name', f'Agent-{i}'), 'index': i,
                  'description': getattr(a, 'description', ''),
@@ -225,6 +356,7 @@ def create_app(agents, agent_pool, config=None):
                  'default_tools': getattr(a, 'default_tools', list(a.function_map.keys()) if hasattr(a, 'function_map') else [])}
                 for i, a in enumerate(agents)
             ],
+            'current_model': getattr(get_agent().llm, 'model', 'Unknown') if hasattr(get_agent(), 'llm') and get_agent().llm else 'Unknown',
         }
         if generating:
             orch_tools = st['agents'][0]['tools'] if st['agents'] else []
@@ -295,7 +427,8 @@ def create_app(agents, agent_pool, config=None):
 
                 agent_runner.llm.generate_cfg.update(pure_llm_cfg)
                 if agent_pool:
-                    agent_pool.llm_cfg.update(pure_llm_cfg)
+                    # Propagate config to all sub-agents
+                    agent_pool.update_llm_cfg(pure_llm_cfg)
                     if read_file_limit is not None:
                         agent_pool.llm_cfg['read_file_limit'] = read_file_limit
                 
@@ -371,7 +504,7 @@ def create_app(agents, agent_pool, config=None):
                             session['history'].append(msg)
                 agent_runner.turn_final_messages = None
 
-            session['generating'] = False
+            _save_session_history()
             final = build_state(generating=False)
             asyncio.run_coroutine_threadsafe(
                 send_queue.put({'type': 'done', **final}), loop
@@ -379,10 +512,14 @@ def create_app(agents, agent_pool, config=None):
 
         except Exception as e:
             traceback.print_exc()
-            session['generating'] = False
             asyncio.run_coroutine_threadsafe(
                 send_queue.put({'type': 'error', 'message': str(e)}), loop
             )
+        finally:
+            session['generating'] = False
+            session['stop_requested'] = False
+            if agent_pool:
+                agent_pool.stopped = False
 
     # ── Background tasks ──────────────────────────────────────────────────
 
@@ -546,6 +683,9 @@ def create_app(agents, agent_pool, config=None):
                     session['history'].append({ROLE: USER, CONTENT: parsed_content})
 
                     # Start agent generation
+                    session['stop_requested'] = False
+                    if agent_pool:
+                        agent_pool.stopped = False
                     session['generation_id'] += 1
                     gen_id = session['generation_id']
                     agent_runner = get_agent()
@@ -566,6 +706,12 @@ def create_app(agents, agent_pool, config=None):
                     if agent_pool:
                         agent_pool.stopped = True
 
+                elif msg_type == 'terminate_sub_agent':
+                    instance_name = data.get('instance_name')
+                    if instance_name and agent_pool:
+                        agent_pool.terminate_instance(instance_name)
+                    session['stop_requested'] = True
+
                 elif msg_type == 'retry':
                     if session['generating']:
                         continue
@@ -581,6 +727,9 @@ def create_app(agents, agent_pool, config=None):
                     if 'generate_cfg' in data:
                         session['generate_cfg'] = data['generate_cfg']
 
+                    session['stop_requested'] = False
+                    if agent_pool:
+                        agent_pool.stopped = False
                     session['generation_id'] += 1
                     gen_id = session['generation_id']
                     agent_runner = get_agent()
@@ -597,6 +746,7 @@ def create_app(agents, agent_pool, config=None):
 
                 elif msg_type == 'reset':
                     session['history'] = []
+                    _save_session_history()
                     session['generating'] = False
                     session['stop_requested'] = False
                     session['generation_id'] += 1
@@ -643,6 +793,7 @@ def create_app(agents, agent_pool, config=None):
                         msg = session['history'][idx]
                         if isinstance(msg, dict):
                             msg[CONTENT] = _parse_multimodal_content(content)
+                        _save_session_history()
                     await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'delete_messages':
@@ -652,6 +803,7 @@ def create_app(agents, agent_pool, config=None):
                     for idx in indices:
                         if 0 <= idx < len(session['history']):
                             session['history'].pop(idx)
+                    _save_session_history()
                     await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'select_agent':
@@ -659,7 +811,12 @@ def create_app(agents, agent_pool, config=None):
                     await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'set_session_name':
-                    session['session_name'] = data.get('name', 'Maine')
+                    new_name = data.get('name', 'Maine')
+                    if new_name != session['session_name']:
+                        session['session_name'] = new_name
+                        # Auto-load history for the new session name
+                        session['history'] = _load_session_history(new_name)
+                        await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'load_session':
                     path = data.get('path')
@@ -672,6 +829,10 @@ def create_app(agents, agent_pool, config=None):
                             instance_name = session.get('session_name', 'Maine')
                             if instance_name in agent_pool.instance_conversations:
                                 session['history'] = copy.deepcopy(agent_pool.instance_conversations[instance_name])
+                                session['generating'] = False
+                                session['stop_requested'] = False
+                                if agent_pool:
+                                    agent_pool.stopped = False
                                 await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'inject':

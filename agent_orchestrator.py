@@ -147,8 +147,15 @@ class OrchestratorAgent(Assistant):
                 return qwen_count(f'{msg.function_call}')
             msg_obj = msg
             
-        content = extract_text_from_message(msg_obj, add_upload_info=True)
-        return qwen_count(content)
+        text = extract_text_from_message(msg_obj, add_upload_info=True)
+        import re
+        image_tokens = 0
+        def repl(match):
+            nonlocal image_tokens
+            image_tokens += 255
+            return f"[Image: {match.group(1)}]"
+        text = re.sub(r'!\[(.*?)\]\(data:image/[^;]+;base64,[a-zA-Z0-9+/=]+\)', repl, text)
+        return qwen_count(text) + image_tokens
 
     def _get_history_tokens(self, messages: List[Message]) -> int:
         """Calculate total tokens in a message list."""
@@ -1059,6 +1066,9 @@ class OrchestratorAgent(Assistant):
                     # We wrap the generator to detect truncation (finish_reason='length')
                     last_output = []
                     for output in self_agent._original_call_llm(messages, **kwargs_llm):
+                        if self.agent_pool.stopped:
+                            logger.info(f"Sub-agent {instance_name} LLM call interrupted by stop flag.")
+                            break
                         last_output = output
                         yield output
                     
@@ -1107,6 +1117,10 @@ class OrchestratorAgent(Assistant):
                     
                     # Note: Context compression mutates the pool history object in-place,
                     # and 'conv' is a reference to that object, so it stays in sync automatically.
+
+            if instance_name in self.agent_pool.terminated_instances:
+                self.agent_pool.terminated_instances.remove(instance_name)
+                return f"[User]: Sub-agent {instance_name} was terminated by user."
 
             if final_resp:
                 # IMPORTANT: Update the persistent conversation instance with the FULL TURN result.
