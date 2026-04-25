@@ -81,7 +81,10 @@ class ReActChat(FnCallAgent):
 
             # Display the streaming response
             output = []
-            for output in self._call_llm(messages=text_messages):
+            extra_generate_cfg = {}
+            if kwargs.get('seed') is not None:
+                extra_generate_cfg['seed'] = kwargs['seed']
+            for output in self._call_llm(messages=text_messages, extra_generate_cfg=extra_generate_cfg):
                 if output:
                     yield [Message(role=ASSISTANT, content=response + output[-1].content)]
 

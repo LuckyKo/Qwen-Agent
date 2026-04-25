@@ -44,25 +44,51 @@ class NousFnCallPrompt(BaseFnCallPrompt):
         messages = []
         for msg in copy.deepcopy(ori_messages):
             role, content, reasoning_content = msg.role, msg.content, msg.reasoning_content
-            if role in (SYSTEM, USER):
-                messages.append(msg)
-            elif role == ASSISTANT:
+            if isinstance(content, str):
+                content = [ContentItem(text=content)]
+            else:
                 content = (content or [])
+
+            if role in (SYSTEM, USER):
+                messages.append(Message(role=role, content=content, reasoning_content=reasoning_content))
+            elif role == ASSISTANT:
                 fn_call = msg.function_call
                 if fn_call:
                     if (not SPECIAL_CODE_MODE) or (CODE_TOOL_PATTERN not in fn_call.name):
                         arguments = fn_call.arguments
                         try:
-                            arguments = json5.loads(arguments)
+                            if isinstance(arguments, str) and arguments.strip():
+                                if arguments.strip().startswith('```'):
+                                    import re
+                                    arguments = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', arguments.strip())
+                                    arguments = re.sub(r'\n?\s*```$', '', arguments)
+                                if arguments.strip():
+                                    arguments = json5.loads(arguments)
                         except Exception:
-                            logger.warning('Invalid json tool-calling arguments')
+                            logger.warning(f'Invalid json tool-calling arguments in history: {arguments}')
                         fc = {'name': fn_call.name, 'arguments': arguments}
                         fc = json.dumps(fc, ensure_ascii=False)
                         fc = f'<tool_call>\n{fc}\n</tool_call>'
                     else:
-                        para = json5.loads(fn_call.arguments)
-                        code = para['code']
-                        para['code'] = ''
+                        arguments = fn_call.arguments
+                        try:
+                            if isinstance(arguments, str) and arguments.strip():
+                                if arguments.strip().startswith('```'):
+                                    import re
+                                    arguments = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', arguments.strip())
+                                    arguments = re.sub(r'\n?\s*```$', '', arguments)
+                                if arguments.strip():
+                                    para = json5.loads(arguments)
+                                else:
+                                    para = {'code': ''}
+                            else:
+                                para = arguments
+                            code = para['code']
+                            para['code'] = ''
+                        except Exception:
+                            logger.warning(f'Invalid code tool arguments in history: {arguments}')
+                            para = {'code': ''}
+                            code = str(arguments)
                         fc = {'name': fn_call.name, 'arguments': para}
                         fc = json.dumps(fc, ensure_ascii=False)
                         fc = f'<tool_call>\n{fc}\n<code>\n{code}\n</code>\n</tool_call>'
@@ -77,7 +103,6 @@ class NousFnCallPrompt(BaseFnCallPrompt):
                     # TODO: Assuming there will only be one continuous reasoning_content here
                     messages.append(Message(role=role, content=content, reasoning_content=reasoning_content))
             elif role == FUNCTION:
-                assert isinstance(content, list)
                 content = [ContentItem(text='<tool_response>\n')] + content + [ContentItem(text='\n</tool_response>')]
                 if messages[-1].role == USER:
                     messages[-1].content.append(ContentItem(text='\n'))
@@ -95,6 +120,8 @@ class NousFnCallPrompt(BaseFnCallPrompt):
         else:
             tool_system = FN_CALL_TEMPLATE.format(tool_descs=tool_descs)
         if messages and messages[0].role == SYSTEM:
+            if isinstance(messages[0].content, str):
+                messages[0].content = [ContentItem(text=messages[0].content)]
             messages[0].content.append(ContentItem(text='\n\n' + tool_system))
         else:
             messages = [Message(role=SYSTEM, content=[ContentItem(text=tool_system)])] + messages
@@ -204,16 +231,30 @@ class NousFnCallPrompt(BaseFnCallPrompt):
                         _snips = one_tool_call_txt[0].split('<code>')
                         for i, _s in enumerate(_snips):
                             if i == 0:
-                                fn = json5.loads(_s)
+                                try:
+                                    content_to_parse = _s.strip()
+                                    if content_to_parse.startswith('```'):
+                                        import re
+                                        content_to_parse = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', content_to_parse)
+                                        content_to_parse = re.sub(r'\n?\s*```$', '', content_to_parse)
+                                    fn = json5.loads(content_to_parse)
+                                except Exception:
+                                    fn = {'name': 'code_interpreter', 'arguments': {}}
                             else:
                                 # TODO: support more flexible params
                                 code = _s.replace('</code>', '')
-                                fn['arguments']['code'] = code
+                                if fn and 'arguments' in fn:
+                                    fn['arguments']['code'] = code
                     else:
                         try:
-                            fn = json5.loads(one_tool_call_txt[0].strip())
+                            content_to_parse = one_tool_call_txt[0].strip()
+                            if content_to_parse.startswith('```'):
+                                import re
+                                content_to_parse = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', content_to_parse)
+                                content_to_parse = re.sub(r'\n?\s*```$', '', content_to_parse)
+                            fn = json5.loads(content_to_parse)
                         except Exception:
-                            logger.warning('Invalid json tool-calling arguments')
+                            logger.warning(f'Invalid json tool-calling arguments in response: {one_tool_call_txt[0].strip()}')
                             fn_name, fn_args = extract_fn(one_tool_call_txt[0].strip())
                             _extra = copy.deepcopy(extra) if extra else {'function_id': ''}
                             _extra['function_id'] = str(tool_id)

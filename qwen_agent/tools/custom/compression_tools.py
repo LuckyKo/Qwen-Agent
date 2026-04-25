@@ -30,7 +30,7 @@ class CompressContext(BaseTool):
                 'description': 'Why compression is needed now (e.g. "Context threshold reached")'
             }
         },
-        'required': ['fraction', 'justification'],
+        'required': ['fraction'],
     }
     
     def __init__(self, agent_pool=None, agent_name=None, **kwargs):

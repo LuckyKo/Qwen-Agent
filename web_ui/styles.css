@@ -428,6 +428,23 @@ body {
   position: relative;
 }
 
+.main-tab .activity-dot {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  display: none;
+  box-shadow: 0 0 4px var(--success);
+}
+
+.main-tab.agent-active .activity-dot {
+  display: block;
+  animation: activity-pulse 1s ease-in-out infinite;
+}
+
 .main-tab:hover {
   color: var(--text-secondary);
   background: var(--bg-hover);
@@ -507,7 +524,8 @@ body {
   min-height: 0;
 }
 
-.sub-agent-activity-bar {
+.sub-agent-activity-bar,
+.main-activity-bar {
   padding: 8px 16px;
   background: var(--bg-tertiary);
   border-top: 1px solid var(--accent-dim);
@@ -520,6 +538,11 @@ body {
   min-height: 40px;
   z-index: 10;
   box-shadow: 0 -2px 8px rgba(0,0,0,0.2);
+}
+
+.main-activity-bar {
+  border-bottom-left-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
 }
 
 .activity-status {

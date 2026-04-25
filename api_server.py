@@ -283,7 +283,27 @@ def create_app(agents, agent_pool, config=None):
                 # Clear potentially stale non-sampling params from persistent agent
                 agent_runner.llm.generate_cfg.pop('mcpServers', None)
                 agent_runner.llm.generate_cfg.pop('disabled_tools', None)
-                agent_runner.llm.generate_cfg.update(ui_cfg)
+                agent_runner.llm.generate_cfg.pop('max_turns', None)
+                agent_runner.llm.generate_cfg.pop('auto_continue', None)
+                agent_runner.llm.generate_cfg.pop('read_file_limit', None)
+                
+                # Separate LLM params from Agent settings to avoid OpenAI API errors
+                pure_llm_cfg = copy.deepcopy(ui_cfg)
+                agent_max_turns = pure_llm_cfg.pop('max_turns', None)
+                agent_auto_continue = pure_llm_cfg.pop('auto_continue', None)
+                read_file_limit = pure_llm_cfg.pop('read_file_limit', None)
+
+                agent_runner.llm.generate_cfg.update(pure_llm_cfg)
+                if agent_pool:
+                    agent_pool.llm_cfg.update(pure_llm_cfg)
+                    if read_file_limit is not None:
+                        agent_pool.llm_cfg['read_file_limit'] = read_file_limit
+                
+                # Attach agent-level settings to the agent instance
+                if agent_max_turns is not None:
+                    agent_runner.max_turns = agent_max_turns
+                if agent_auto_continue is not None:
+                    agent_runner.auto_continue_enabled = agent_auto_continue
 
             mcp_tools_added = []
             if mcp_servers:

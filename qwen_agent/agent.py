@@ -14,6 +14,7 @@
 
 import copy
 import json
+import random
 import traceback
 from abc import ABC, abstractmethod
 from typing import Dict, Iterator, List, Optional, Tuple, Union
@@ -106,6 +107,10 @@ class Agent(ABC):
                 kwargs['lang'] = 'zh'
             else:
                 kwargs['lang'] = 'en'
+
+        # Stabilize seed for the entire run to prevent context reprocessing across tool turns
+        if kwargs.get('seed') is None:
+            kwargs['seed'] = random.randint(0, 2**30)
 
         if self.system_message:
             if not new_messages or new_messages[0][ROLE] != SYSTEM:

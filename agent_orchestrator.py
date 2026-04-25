@@ -25,6 +25,8 @@ from qwen_agent.log import logger
 from qwen_agent.llm.schema import (
     ASSISTANT, CONTENT, FUNCTION, IMAGE, ROLE, SYSTEM, USER, Message,
 )
+import qwen_agent.settings
+qwen_agent.settings.MAX_LLM_CALL_PER_RUN = 100
 from qwen_agent.settings import MAX_LLM_CALL_PER_RUN
 from qwen_agent.tools.base import BaseTool
 from qwen_agent.utils.utils import (
@@ -542,7 +544,14 @@ class OrchestratorAgent(Assistant):
         # messages[0] now contains all stabilized instructions, so caches will hit across turns.
         llm_messages = copy.deepcopy(messages)
             
-        num_llm_calls_available = MAX_LLM_CALL_PER_RUN
+        # Robustness: Read turn limit and auto-continue settings
+        # These may be set on the instance by api_server.py or passed in kwargs
+        max_turns = getattr(self, 'max_turns', None) or kwargs.get('max_turns') or 50
+        self.auto_continue_enabled = getattr(self, 'auto_continue_enabled', None)
+        if self.auto_continue_enabled is None:
+            self.auto_continue_enabled = True # default
+        
+        num_llm_calls_available = max(int(max_turns), MAX_LLM_CALL_PER_RUN)
         response: List[Message] = []
 
         while num_llm_calls_available > 0:
@@ -591,13 +600,47 @@ class OrchestratorAgent(Assistant):
             if not output:
                 break
     
+            # --- UPDATE HISTORY ---
+            # We must ensure reasoning_content is visible to the LLM in the next turn.
+            # Most providers don't support 'reasoning_content' in input history,
+            # so we merge it into content using standard tags.
+            history_output = []
+            for msg in output:
+                m = copy.deepcopy(msg)
+                if m.get('reasoning_content'):
+                    reasoning = f"<think>\n{m['reasoning_content']}\n</think>\n"
+                    old_content = m.get(CONTENT)
+                    if old_content is None:
+                        m[CONTENT] = reasoning
+                    elif isinstance(old_content, list):
+                        # Prepend reasoning as a new text item if it's a list
+                        m[CONTENT] = [ContentItem(text=reasoning)] + old_content
+                    else:
+                        m[CONTENT] = reasoning + str(old_content)
+                history_output.append(m)
+
             response.extend(output)
             messages.extend(output)
-            llm_messages.extend(output)
+            llm_messages.extend(history_output)
     
             # Log generated messages
+            is_truncated = False
             for msg in output:
                 logger_inst.log_message(msg)
+                # Detection: finish_reason is often in extra
+                if msg.extra and msg.extra.get('finish_reason') == 'length':
+                    is_truncated = True
+            
+            # --- AUTO-CONTINUE ON LENGTH LIMIT ---
+            if is_truncated and self.auto_continue_enabled:
+                logger.info(f"Detected message truncation (length limit) for {self.name}. Auto-triggering continuation.")
+                # Increment budget to allow the continuation
+                num_llm_calls_available += 1
+                # Inject a system prompt to continue
+                cont_msg = Message(role=USER, content="[SYSTEM]: Your previous response was cut off by the length limit. Please continue exactly from where you left off, without repeating yourself.")
+                llm_messages.append(cont_msg)
+                # Yield a small hint to the UI
+                yield response + output + [Message(role=ASSISTANT, content="... (Continuing output due to length limit)")]
     
             used_any_tool = False
             for out in output:
@@ -751,8 +794,18 @@ class OrchestratorAgent(Assistant):
                     
                 yield response
     
+            # Check if the turn is truly finished.
+            has_real_content = any(out.get('content') and not out.get('content').startswith('<think>') for out in output)
+            has_thinking = any(out.get('thought') or out.get('reasoning_content') for out in output)
+            
             if not used_any_tool:
-                break
+                if has_thinking and not has_real_content:
+                    # It's a pure thinking turn. Continue to the next turn.
+                    logger.info(f"Pure reasoning turn detected for {self.name}. Continuing to next turn.")
+                    pass
+                else:
+                    # Final answer or real content provided, or no thinking at all.
+                    break
     
             # No final update_history needed: all messages are logged individually
             # via log_message above (LLM output at line 502, fn results at line 542).
@@ -760,6 +813,12 @@ class OrchestratorAgent(Assistant):
             # Expose the final context for the WebUI so it can detect if a compression 
             # occurred and mutated the history mid-turn.
             self.turn_final_messages = messages
+
+        if num_llm_calls_available <= 0:
+            logger.warning(f"Agent {self.name} reached turn limit. Stopping.")
+            term_msg = Message(role=ASSISTANT, content="\n\n[SYSTEM: Turn limit reached. If the task is incomplete, please ask me to continue.]")
+            response.append(term_msg)
+            yield response
 
         yield response
 
@@ -966,6 +1025,12 @@ class OrchestratorAgent(Assistant):
         # The API server only patches the orchestrator's llm.generate_cfg with
         # disabled_tools from the frontend. Sub-agents have their own LLM instances,
         # so we must copy the policy over before running them.
+        # ── Propagate agent settings to sub-agent ──
+        if hasattr(agent, 'max_turns') is False:
+            agent.max_turns = getattr(self, 'max_turns', 50)
+        if hasattr(agent, 'auto_continue_enabled') is False:
+            agent.auto_continue_enabled = getattr(self, 'auto_continue_enabled', True)
+
         orchestrator_disabled = getattr(self.llm, 'generate_cfg', {}).get('disabled_tools')
         if orchestrator_disabled and hasattr(agent, 'llm') and agent.llm:
             if not hasattr(agent.llm, 'generate_cfg') or agent.llm.generate_cfg is None:
@@ -980,8 +1045,40 @@ class OrchestratorAgent(Assistant):
                 agent._original_call_llm = agent._call_llm
 
                 def hooked_call_llm(self_agent, messages: List[Message], **kwargs_llm):
+                    # --- ASYNC MESSAGE INJECTION ---
+                    if hasattr(self.agent_pool, 'async_message_queue') and self.agent_pool.async_message_queue:
+                        while self.agent_pool.async_message_queue:
+                            async_msg_text = self.agent_pool.async_message_queue.pop(0)
+                            async_msg = Message(role=USER, content=f"[ASYNC INTERRUPTION]: {async_msg_text}")
+                            messages.append(async_msg)
+                            logger.info(f"Injected async user message into sub-agent {instance_name} via LLM hook: {async_msg_text}")
+
                     self._inject_compression_warning_for_agent(self_agent, instance_name, messages)
-                    return self_agent._original_call_llm(messages, **kwargs_llm)
+                    
+                    # --- CALL LLM WITH AUTO-CONTINUE ---
+                    # We wrap the generator to detect truncation (finish_reason='length')
+                    last_output = []
+                    for output in self_agent._original_call_llm(messages, **kwargs_llm):
+                        last_output = output
+                        yield output
+                    
+                    # Detect truncation
+                    is_truncated = False
+                    for msg in last_output:
+                        if msg.extra and msg.extra.get('finish_reason') == 'length':
+                            is_truncated = True
+                            break
+                    
+                    # Read auto-continue setting from current orchestrator config
+                    # Note: self is the OrchestratorAgent instance
+                    auto_continue_enabled = getattr(self, 'auto_continue_enabled', True)
+                    
+                    if is_truncated and auto_continue_enabled:
+                        logger.info(f"Sub-agent {instance_name} truncated by length limit. Auto-triggering continuation...")
+                        cont_msg = Message(role=USER, content="[SYSTEM]: Your previous response was cut off by the token limit. Please continue exactly from where you left off, without repeating yourself.")
+                        messages.append(cont_msg)
+                        # Recursive call to continue the same LLM turn
+                        yield from hooked_call_llm(self_agent, messages, **kwargs_llm)
 
                 import types
                 agent._call_llm = types.MethodType(hooked_call_llm, agent)

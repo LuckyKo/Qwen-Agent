@@ -42,6 +42,7 @@ const $ = (sel) => document.querySelector(sel);
 const messagesEl = $('#messages');
 const chatInput = $('#chatInput');
 const sendBtn = $('#sendBtn');
+const continueBtn = $('#continueBtn');
 const stopBtn = $('#stopBtn');
 const retryBtn = $('#retryBtn');
 const resetBtn = $('#resetBtn');
@@ -68,6 +69,8 @@ const settingMaxContext = $('#setting-max-context');
 const settingMaxTokens = $('#setting-max-tokens');
 const settingSoundIntervention = $('#setting-sound-intervention');
 const settingSoundCompleted = $('#setting-sound-completed');
+const settingReadFileLimit = $('#setting-read-file-limit');
+const valReadFileLimit = $('#val-read-file-limit');
 
 const settingUserColor = $('#setting-user-color');
 const settingAssistantColor = $('#setting-assistant-color');
@@ -91,6 +94,7 @@ const ranges = [
   { input: $('#setting-repeat-penalty'), output: $('#val-repeat-penalty') },
   { input: $('#setting-presence-penalty'), output: $('#val-presence-penalty') },
   { input: $('#setting-frequency-penalty'), output: $('#val-frequency-penalty') },
+  { input: $('#setting-read-file-limit'), output: $('#val-read-file-limit') },
 ];
 
 // ── Initialization ───────────────────────────────────────────────────────────
@@ -261,25 +265,28 @@ ranges.forEach(r => {
 // ── Settings Persistence ─────────────────────────────────────────────────────
 
 function saveSettings() {
-  const s = {};
-  ranges.forEach(r => {
-    if (r.input) s[r.input.id] = r.input.value;
-  });
+  const s = getGenerateCfg();
   if (settingLinesEnabled) s['setting-lines-enabled'] = settingLinesEnabled.checked;
   if (settingSoundIntervention) s['setting-sound-intervention'] = settingSoundIntervention.checked;
   if (settingSoundCompleted) s['setting-sound-completed'] = settingSoundCompleted.checked;
-  if (settingTruncateTools) s['setting-truncate-tools'] = settingTruncateTools.checked;
   if (settingUserColor) s['setting-user-color'] = settingUserColor.value;
   if (settingAssistantColor) s['setting-assistant-color'] = settingAssistantColor.value;
   if (settingRawEditColor) s['setting-raw-edit-color'] = settingRawEditColor.value;
   if (settingFontSize) s['setting-font-size'] = settingFontSize.value;
   if (settingMaxContext) s['setting-max-context'] = settingMaxContext.value;
-  if (settingMaxTokens) s['setting-max-tokens'] = settingMaxTokens.value;
-  
-  if (settingVisionEnabled) s['setting-vision-enabled'] = settingVisionEnabled.checked;
+  if (settingTruncateTools) s['truncate-tools'] = settingTruncateTools.checked;
+
   if (settingImageDetail) s['setting-image-detail'] = settingImageDetail.value;
   if (settingMaxImageSize) s['setting-max-image-size'] = settingMaxImageSize.value;
   if (settingMcpServers) s['setting-mcp-servers'] = settingMcpServers.value;
+  
+  ranges.forEach(r => {
+    if (r.input) s[r.input.id] = r.input.value;
+  });
+
+  if ($('#setting-max-turns')) s['max-turns'] = $('#setting-max-turns').value;
+  if ($('#setting-auto-continue')) s['auto-continue'] = $('#setting-auto-continue').checked;
+  if ($('#setting-read-file-limit')) s['read-file-limit'] = $('#setting-read-file-limit').value;
 
   localStorage.setItem('qwen-settings', JSON.stringify(s));
 }
@@ -302,8 +309,8 @@ function loadSettings() {
       settingFontSize.dispatchEvent(new Event('input'));
     }
 
-    if (settingMaxTokens && s['setting-max-tokens'] !== undefined) {
-      settingMaxTokens.value = s['setting-max-tokens'];
+    if (settingMaxTokens && s['max_tokens'] !== undefined) {
+      settingMaxTokens.value = s['max_tokens'];
       settingMaxTokens.dispatchEvent(new Event('input'));
     }
 
@@ -325,8 +332,8 @@ function loadSettings() {
       settingSoundCompleted.checked = s['setting-sound-completed'];
     }
 
-    if (settingTruncateTools && s['setting-truncate-tools'] !== undefined) {
-      settingTruncateTools.checked = s['setting-truncate-tools'];
+    if (settingTruncateTools && s['truncate-tools'] !== undefined) {
+      settingTruncateTools.checked = s['truncate-tools'];
     }
 
     if (settingUserColor && s['setting-user-color'] !== undefined) {
@@ -342,9 +349,14 @@ function loadSettings() {
       settingRawEditColor.dispatchEvent(new Event('input'));
     }
     
-    if (settingVisionEnabled && s['setting-vision-enabled'] !== undefined) {
-      settingVisionEnabled.checked = s['setting-vision-enabled'];
+    if (s['vision-enabled'] !== undefined) $('#setting-vision-enabled').checked = s['vision-enabled'];
+    if (s['max-turns'] !== undefined) $('#setting-max-turns').value = s['max-turns'];
+    if (s['auto-continue'] !== undefined) $('#setting-auto-continue').checked = s['auto-continue'];
+    if (s['read-file-limit'] !== undefined) {
+      $('#setting-read-file-limit').value = s['read-file-limit'];
+      $('#setting-read-file-limit').dispatchEvent(new Event('input'));
     }
+
     if (settingImageDetail && s['setting-image-detail'] !== undefined) {
       settingImageDetail.value = s['setting-image-detail'];
     }
@@ -570,6 +582,35 @@ function renderMessages() {
 
   // Auto-scroll
   scrollToBottom();
+
+  // Update main activity bar
+  updateMainActivityBar();
+}
+
+function updateMainActivityBar() {
+  const bar = document.getElementById('mainActivityBar');
+  if (!bar) return;
+
+  const activityText = bar.querySelector('.activity-text');
+  const chatTab = document.getElementById('mainTabChat');
+
+  if (state.generating) {
+    bar.classList.add('active');
+    if (chatTab) chatTab.classList.add('agent-active');
+    
+    const msgs = state.messages || [];
+    const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+    if (lastMsg) {
+      const fullText = (lastMsg.reasoning_content || '') + (lastMsg.content || '') + (lastMsg.function_call ? JSON.stringify(lastMsg.function_call) : '');
+      activityText.textContent = getLastWords(fullText, 10) || 'Streaming...';
+    } else {
+      activityText.textContent = 'Agent Starting...';
+    }
+  } else {
+    bar.classList.remove('active');
+    if (chatTab) chatTab.classList.remove('agent-active');
+    activityText.textContent = 'Agent Idle';
+  }
 }
 
 function fullRender(msgs, container) {
@@ -1077,11 +1118,18 @@ function renderSubAgents() {
       tabBtn.onclick = () => switchMainTab(tabId);
       mainTabBar.appendChild(tabBtn);
     }
-    tabBtn.innerHTML = `${isActive ? '<span class="sub-tab-pulse"></span>' : '<span class="main-tab-icon">🤖</span>'} ${escapeHtml(name)}`;
+    tabBtn.innerHTML = `${isActive ? '<span class="sub-tab-pulse"></span>' : '<span class="main-tab-icon">🤖</span>'} ${escapeHtml(name)} <span class="activity-dot"></span>`;
+    
     // Highlight the active sub-agent's tab
-    if (isActive && activeTop === name) {
-      tabBtn.classList.add('has-activity');
+    if (isActive) {
+      tabBtn.classList.add('agent-active');
+      if (activeTop === name) {
+        tabBtn.classList.add('has-activity');
+      } else {
+        tabBtn.classList.remove('has-activity');
+      }
     } else {
+      tabBtn.classList.remove('agent-active');
       tabBtn.classList.remove('has-activity');
     }
 
@@ -1104,8 +1152,55 @@ function renderSubAgents() {
       mainTabPanels.appendChild(panel);
     }
 
+    // Ensure input area exists for sub-agent direct interaction
+    let inputArea = panel.querySelector('.input-area');
+    if (!inputArea) {
+      inputArea = document.createElement('div');
+      inputArea.className = 'input-area';
+      inputArea.innerHTML = `
+        <div class="input-wrapper">
+          <textarea placeholder="Message ${name}..." rows="1"></textarea>
+          <div class="sub-input-btns" style="display: flex; gap: 4px; align-items: center;">
+            <button class="btn btn-secondary sub-continue-btn" title="Continue (Ctrl+Shift+Enter)" style="padding: 6px 8px; font-size: 12px;">⏩</button>
+            <button class="btn btn-primary send-btn" title="Send (Enter)">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M2 21l21-9L2 3v7l15 2-15 2z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      `;
+      const textarea = inputArea.querySelector('textarea');
+      const sendBtn = inputArea.querySelector('.send-btn');
+      const contBtn = inputArea.querySelector('.sub-continue-btn');
+
+      textarea.addEventListener('input', () => autoResize(textarea));
+      textarea.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage(textarea);
+        } else if (e.key === 'Enter' && e.shiftKey && e.ctrlKey) {
+          e.preventDefault();
+          continueMessage();
+        }
+      });
+      sendBtn.onclick = () => sendMessage(textarea);
+      if (contBtn) contBtn.onclick = () => continueMessage();
+
+      // We'll append it before the activity bar in renderSubAgentPanel
+    }
+
     // Render sub-agent messages into the panel
     renderSubAgentPanel(panel, sa[name], name);
+
+    // Update tab activity dot
+    if (tabBtn) {
+      if (sa[name].active) {
+        tabBtn.classList.add('agent-active');
+      } else {
+        tabBtn.classList.remove('agent-active');
+      }
+    }
   }
 }
 
@@ -1140,7 +1235,50 @@ function renderSubAgentPanel(panel, agentData, name) {
     panel.appendChild(activityBar);
   }
 
-  // 3. Always update activity bar status
+  // 3. Ensure input area is present and correctly ordered
+  let inputArea = panel.querySelector('.input-area');
+  if (!inputArea) {
+    // If not created in renderSubAgents (first run), create now
+    inputArea = document.createElement('div');
+    inputArea.className = 'input-area';
+    inputArea.innerHTML = `
+      <div class="input-wrapper">
+        <textarea placeholder="Message ${name}..." rows="1"></textarea>
+        <div class="sub-input-btns" style="display: flex; gap: 4px; align-items: center;">
+          <button class="btn btn-secondary sub-continue-btn" title="Continue (Ctrl+Shift+Enter)" style="padding: 6px 8px; font-size: 12px;">⏩</button>
+          <button class="btn btn-primary send-btn" title="Send (Enter)">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+              <path d="M2 21l21-9L2 3v7l15 2-15 2z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    `;
+    const textarea = inputArea.querySelector('textarea');
+    const sendBtn = inputArea.querySelector('.send-btn');
+    const contBtn = inputArea.querySelector('.sub-continue-btn');
+
+    textarea.addEventListener('input', () => autoResize(textarea));
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage(textarea);
+      } else if (e.key === 'Enter' && e.shiftKey && e.ctrlKey) {
+        e.preventDefault();
+        continueMessage();
+      }
+    });
+    sendBtn.onclick = () => sendMessage(textarea);
+    if (contBtn) contBtn.onclick = () => continueMessage();
+    panel.insertBefore(inputArea, activityBar);
+  } else {
+    // Ensure it's before activity bar
+    if (inputArea.nextSibling !== activityBar) {
+      panel.insertBefore(inputArea, activityBar);
+    }
+  }
+
+  // 4. Always update activity bar status
   const activityText = activityBar.querySelector('.activity-text');
   const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
   if (agentData.active) {
@@ -1354,6 +1492,7 @@ function updateControls() {
   }
   stopBtn.style.display = state.generating ? 'inline-flex' : 'none';
   sendBtn.disabled = !state.connected;
+  continueBtn.disabled = state.generating || state.messages.length === 0;
   retryBtn.disabled = state.generating || state.messages.length === 0;
 
   statusText.textContent = state.generating ? 'Generating...' : '';
@@ -1370,22 +1509,30 @@ function autoResize(el) {
 }
 
 function estimateTokens(text) {
+  if (!text) return 0;
   let imageTokens = 0;
   
-  // Strip out base64 image strings so they don't skew the text length
-  const imageRegex = /!\[(.*?)\]\((data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+)\)/g;
-  const visionEnabled = settingVisionEnabled ? settingVisionEnabled.checked : false;
+  // 1. Detect and strip base64 image patterns (markdown format)
+  // Handles both standard data: URIs and raw base64 (common in tool results)
+  const imageRegex = /!\[(.*?)\]\((?:data:image\/[^;]+;base64,)?[a-zA-Z0-9+/=]{50,}\)/g;
   
-  const cleanedText = text.replace(imageRegex, (match, alt) => {
-    // If vision is enabled, we'll estimate roughly 255 tokens per image 
-    if (visionEnabled) {
-      imageTokens += 255;
-    }
+  // 2. Also catch raw large base64 blobs not in markdown format (e.g. raw tool outputs)
+  const rawBlobRegex = /(?:data:image\/[^;]+;base64,)?[a-zA-Z0-9+/=]{500,}/g;
+
+  const visionEnabled = (typeof settingVisionEnabled !== 'undefined' && settingVisionEnabled) ? settingVisionEnabled.checked : false;
+  
+  let cleanedText = text.replace(imageRegex, (match, alt) => {
+    if (visionEnabled) imageTokens += 255;
     return `[Image: ${alt}]`;
   });
 
-  // Prose estimation: modern tokenizer ratios (LLaMA/Mistral)
-  // roughly average 1 token ≈ 4.86 characters
+  cleanedText = cleanedText.replace(rawBlobRegex, () => {
+    // If it's a huge raw blob, we still treat it as a potential image/data block
+    if (visionEnabled) imageTokens += 255;
+    return '[DATA BLOB]';
+  });
+
+  // Prose estimation: average 1 token ≈ 4.86 characters
   return Math.ceil(cleanedText.length / 4.86) + imageTokens;
 }
 
@@ -1527,11 +1674,16 @@ chatInput.addEventListener('paste', (e) => {
 // ── Event listeners ──────────────────────────────────────────────────────────
 
 chatInput.addEventListener('input', () => autoResize(chatInput));
+retryBtn.onclick = retryGeneration;
+continueBtn.onclick = continueMessage;
 
 chatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
+  } else if (e.key === 'Enter' && e.shiftKey && e.ctrlKey) {
+    e.preventDefault();
+    continueMessage();
   }
 });
 
@@ -1573,6 +1725,10 @@ function getGenerateCfg() {
   if ($('#setting-frequency-penalty')) cfg.frequency_penalty = parseFloat($('#setting-frequency-penalty').value);
   if ($('#setting-max-tokens')) cfg.max_tokens = parseInt($('#setting-max-tokens').value) || 2048;
   
+  if ($('#setting-max-turns')) cfg.max_turns = parseInt($('#setting-max-turns').value) || 50;
+  if ($('#setting-auto-continue')) cfg.auto_continue = $('#setting-auto-continue').checked;
+  if ($('#setting-read-file-limit')) cfg.read_file_limit = parseInt($('#setting-read-file-limit').value) || 1000;
+
   if ($('#setting-mcp-servers') && $('#setting-mcp-servers').value.trim()) {
     try {
       cfg.mcpServers = JSON.parse($('#setting-mcp-servers').value.trim());
@@ -1587,28 +1743,45 @@ function getGenerateCfg() {
   return cfg;
 }
 
-function sendMessage() {
-  const rawText = chatInput.value.trim();
+function sendMessage(inputEl) {
+  const targetInput = inputEl instanceof HTMLElement ? inputEl : chatInput;
+  const rawText = targetInput.value.trim();
   if (!rawText) return;
   
   const text = formatMultimodalContent(rawText);
-  chatInput.value = '';
-  autoResize(chatInput);
+  targetInput.value = '';
+  autoResize(targetInput);
 
   if (state.generating) {
     // Async injection: message will be injected into the running agent
     send({ type: 'message', text });
     // Visual feedback
-    const prev = statusText.textContent;
-    statusText.textContent = '⚡ Message injected';
-    statusText.style.color = 'var(--accent)';
-    setTimeout(() => {
-      statusText.textContent = prev;
-      statusText.style.color = '';
-    }, 1500);
+    const feedbackText = document.getElementById('statusText');
+    if (feedbackText) {
+      const prev = feedbackText.textContent;
+      feedbackText.textContent = '⚡ Message injected';
+      feedbackText.style.color = 'var(--accent)';
+      setTimeout(() => {
+        feedbackText.textContent = prev;
+        feedbackText.style.color = '';
+      }, 1500);
+    }
     return;
   }
 
+  send({
+    type: 'message',
+    text,
+    agent_index: state.agentIndex,
+    session_name: state.sessionName,
+    generate_cfg: getGenerateCfg()
+  });
+}
+
+function continueMessage() {
+  if (state.generating) return;
+  
+  const text = "[SYSTEM]: Please continue.";
   send({
     type: 'message',
     text,

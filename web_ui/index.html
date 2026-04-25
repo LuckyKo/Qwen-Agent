@@ -133,9 +133,18 @@
                 </button>
               </div>
               <div class="input-controls">
+                <button id="continueBtn" class="btn btn-secondary" title="Continue generation (Ctrl+Shift+Enter)">⏩ Continue</button>
+                <button id="retryBtn" class="btn btn-secondary" title="Retry last turn (Ctrl+Shift+R)">🔄 Retry</button>
                 <button id="stopBtn" class="btn btn-stop" style="display:none;">⏹ Stop</button>
                 <span class="status-text" id="statusText"></span>
               </div>
+            </div>
+            <div id="mainActivityBar" class="main-activity-bar">
+              <div class="activity-status">
+                <span class="activity-dot"></span>
+                <span>Activity</span>
+              </div>
+              <div class="activity-text">Idle</div>
             </div>
           </div>
           <!-- Sub-agent panels injected here dynamically -->
@@ -303,6 +312,23 @@
                   <label class="setting-field">
                     <span>Target Agent</span>
                     <select id="setting-agent-select" class="sidebar-select"></select>
+                  </label>
+                </div>
+              </div>
+              <div class="settings-section">
+                <h3 class="settings-section-title">Multi-Agent Control</h3>
+                <div class="settings-section-body">
+                  <label class="setting-field">
+                    <span>Max Turns per Run</span>
+                    <input type="number" id="setting-max-turns" min="1" max="500" value="50" />
+                  </label>
+                  <label class="setting-field toggle-field">
+                    <span>Auto-Continue (Truncation)</span>
+                    <input type="checkbox" id="setting-auto-continue" checked />
+                  </label>
+                  <label class="setting-field">
+                    <span>Read File Limit (Lines) <output id="val-read-file-limit">1000</output></span>
+                    <input type="range" id="setting-read-file-limit" min="100" max="5000" step="50" value="1000" />
                   </label>
                 </div>
               </div>

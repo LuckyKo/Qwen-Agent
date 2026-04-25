@@ -22,8 +22,12 @@ class ReadFile(BaseTool):
             },
             'limit': {
                 'type': 'integer',
-                'description': 'Maximum number of lines to read',
-                'default': 1000
+                'description': 'Maximum number of lines to read. Subject to truncation if full_read is false.'
+            },
+            'full_read': {
+                'type': 'boolean',
+                'description': 'Set to true to read the entire file (bypasses truncation limit). Default is false.',
+                'default': False
             }
         },
         'required': ['path'],
@@ -41,7 +45,22 @@ class ReadFile(BaseTool):
         params = self._verify_json_format_args(params)
         path = params['path']
         start_line = params.get('start_line', 1)
-        limit = params.get('limit', 1000)
+        limit = params.get('limit')
+        full_read = params.get('full_read', False)
+
+        # Get the truncation limit from agent/tool options
+        cfg_limit = 1000
+        if hasattr(self, 'agent_pool') and self.agent_pool:
+            cfg_limit = getattr(self.agent_pool, 'llm_cfg', {}).get('read_file_limit', cfg_limit)
+        elif self.cfg.get('read_file_limit'):
+            cfg_limit = self.cfg.get('read_file_limit')
+
+        if not full_read:
+            if limit is None or limit > cfg_limit:
+                limit = cfg_limit
+        else:
+            if limit is None:
+                limit = 1000000  # Effectively "full" read
 
         if hasattr(self, 'agent_pool') and self.agent_pool:
             base_dir = self.agent_pool.operation_manager.base_dir
@@ -243,7 +262,7 @@ class EditFile(BaseTool):
                 'description': 'Why you need to edit this file'
             }
         },
-        'required': ['path', 'justification'],
+        'required': ['path'],
     }
 
     def __init__(self, cfg=None, **kwargs):
