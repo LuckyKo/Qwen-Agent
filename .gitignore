@@ -21,6 +21,7 @@ Qwen-Agent
 docqa/*
 log/*
 log.jsonl
+out.txt
 
 ai_agent/debug.json
 ai_agent/local_prompts/*
