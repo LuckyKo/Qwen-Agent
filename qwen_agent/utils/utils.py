@@ -295,22 +295,77 @@ def extract_code(text: Union[str, dict]) -> str:
         try:
             text = json5.loads(text)['code']
         except Exception:
-            print_traceback(is_error=False)
+            pass
     # If no code blocks found, return original text
     return text
 
 
+def repair_invalid_json(text: str) -> str:
+    """
+    Attempt to repair common LLM JSON mistakes before parsing.
+    Specifically handles triple-quoted strings and unescaped newlines in values.
+    """
+    import re
+
+    # 1. Handle triple quotes in values: """content""" -> "content" (with escaped newlines)
+    repaired = re.sub(r'(":\s*)"""(.*?)"""(?=[,}\s])',
+                      lambda m: m.group(1) + json.dumps(m.group(2).replace('\\n', '\n')).replace('\\\\n', '\\n'),
+                      text, flags=re.DOTALL)
+
+    # 2. Handle literal newlines in double-quoted values (very common failure mode)
+    def escape_newlines(match):
+        prefix = match.group(1)
+        content = match.group(2)
+        # Escape any literal newlines that shouldn't be there
+        return prefix + '"' + content.replace('\n', '\\n') + '"'
+
+    # This regex matches:
+    # (:\s*)           -> The colon and optional whitespace before the value
+    # "                -> The opening quote
+    # ((?:[^"\\]|\\.)*?) -> The content: any char except " or \, OR any escaped char (\.)
+    # "                -> The closing quote
+    # (?=\s*[,}\]])     -> Lookahead for a delimiter to ensure it's a value end
+    repaired = re.sub(r'(:\s*)"((?:[^"\\]|\\.)*?)"(?=\s*[,}\]])', escape_newlines, repaired, flags=re.DOTALL)
+
+    return repaired
+
+
 def json_loads(text: str) -> dict:
-    text = text.strip('\n')
-    if text.startswith('```') and text.endswith('\n```'):
-        text = '\n'.join(text.split('\n')[1:-1])
+    import json5
+    original_text = text.strip()
+
+    # 1. Try parsing as-is (handles most cases including those with backticks inside)
     try:
-        return json.loads(text)
-    except json.decoder.JSONDecodeError as json_err:
+        return json5.loads(original_text)
+    except Exception:
+        pass
+
+    # 2. Try stripping markdown code blocks (handles cases where the whole response is wrapped)
+    text = original_text
+    if '```' in text:
+        import re
+        match = re.search(r'```(?:[a-zA-Z0-9]*\n)?(.*?)```', text, re.DOTALL)
+        if match:
+            text = match.group(1).strip()
+        else:
+            text = text.replace('```json', '').replace('```', '').strip()
+
+    try:
+        return json5.loads(text)
+    except Exception:
+        pass
+
+    # 3. Try repairing common mistakes (triple quotes, literal newlines)
+    try:
+        repaired = repair_invalid_json(original_text)
+        return json5.loads(repaired)
+    except Exception:
+        # 4. Try repairing the STRIPPED text as a last resort
         try:
-            return json5.loads(text)
-        except ValueError:
-            raise json_err
+            repaired = repair_invalid_json(text)
+            return json5.loads(repaired)
+        except Exception as e:
+            raise ValueError(f'Parameters must be formatted as a valid JSON! Detail: {str(e)}')
 
 
 class PydanticJSONEncoder(json.JSONEncoder):

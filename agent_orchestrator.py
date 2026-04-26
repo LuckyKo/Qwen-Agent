@@ -232,7 +232,8 @@ class OrchestratorAgent(Assistant):
         if available_tokens <= 0:
             available_tokens = max_tokens  # fallback if system prompt is huge
 
-        threshold = int(available_tokens * 0.95)
+        total_threshold = int(available_tokens * 0.95)
+        per_tool_threshold = int(available_tokens * 0.25)
 
         # Inline image content (e.g. from screenshot): ![image/png](iVBOR...) — skip truncation since it's already compact markdown data, not prose the LLM parses as text tokens.
         if '![image/' in tool_result:
@@ -240,13 +241,24 @@ class OrchestratorAgent(Assistant):
 
         result_tokens = max(1, len(tool_result) // 3)
         
-        if non_system_tokens + result_tokens <= threshold:
+        # Check if truncation is needed for ANY reason:
+        # 1. Individual tool output exceeds 25% of total context
+        # 2. Total context would exceed 95% capacity
+        if (result_tokens <= per_tool_threshold) and (non_system_tokens + result_tokens <= total_threshold):
             return tool_result  # Fits fine, no truncation needed
         
         # --- Truncation required ---
-        remaining_token_budget = max(200, threshold - non_system_tokens)
-        # Convert back to chars (use 2.5 multiplier to be safe)
-        char_budget = int(remaining_token_budget * 2.5)
+        # Determine target token count for the result
+        target_tokens = result_tokens
+        if target_tokens > per_tool_threshold:
+            target_tokens = per_tool_threshold
+        
+        # Final safety check against total context budget
+        if non_system_tokens + target_tokens > total_threshold:
+            target_tokens = max(200, total_threshold - non_system_tokens)
+            
+        # Convert tokens back to chars (use 2.5 multiplier to be safe)
+        char_budget = int(target_tokens * 2.5)
         
         # Reserve space for the truncation notice itself (~300 chars)
         char_budget = max(100, char_budget - 300)
@@ -268,11 +280,14 @@ class OrchestratorAgent(Assistant):
             # Even if spill fails, still truncate to prevent context overflow
         
         truncated = tool_result[:char_budget]
-        usage_pct = (non_system_tokens / available_tokens) * 100
         
+        if result_tokens > per_tool_threshold:
+            reason = f"Individual tool limit (used {result_tokens/available_tokens*100:.0f}% of context)"
+        else:
+            reason = f"Total context safety (capacity at {(non_system_tokens+result_tokens)/available_tokens*100:.0f}%)"
+
         notice = (
-            f"\n\n[TOOL RESPONSE TRUNCATED — Context at {usage_pct:.0f}% capacity "
-            f"({non_system_tokens}/{available_tokens} tokens). "
+            f"\n\n[TOOL RESPONSE TRUNCATED — {reason}. "
             f"Full output ({len(tool_result)} chars) saved to: {spill_path}\n"
             f"You can read it with read_file if needed. "
             f"Consider compressing context before continuing.]"
@@ -280,8 +295,7 @@ class OrchestratorAgent(Assistant):
         
         logger.info(
             f"Truncated '{tool_name}' result for {instance_name}: "
-            f"{len(tool_result)} chars -> {len(truncated)} chars. "
-            f"Context: {non_system_tokens}/{available_tokens} tokens ({usage_pct:.0f}%). "
+            f"{len(tool_result)} chars -> {len(truncated)} chars. Reason: {reason}. "
             f"Spill file: {spill_path}"
         )
         
@@ -357,8 +371,9 @@ class OrchestratorAgent(Assistant):
 
         # 2. Warning Threshold (> 85%)
         if usage_pct > 85.0:
+            warning_text = "[SYSTEM WARNING: Context window at"
             warning = (
-                f"\n\n[SYSTEM WARNING: Context window at {usage_pct:.1f}% capacity ({current_tokens}/{max_tokens} tokens). "
+                f"\n\n{warning_text} {usage_pct:.1f}% capacity ({current_tokens}/{max_tokens} tokens). "
                 "Consider using the `compress_context` tool to summarize old history and free up space. "
                 "Propose a fraction (e.g. 0.2 for 20%) and a justification. The summary will be sent for approval.]"
             )
@@ -368,10 +383,18 @@ class OrchestratorAgent(Assistant):
                 # Note: This is NOT saved to the permanent AgentPool history
                 last_msg = messages[-1]
                 if isinstance(last_msg.content, str):
-                    last_msg.content += warning
+                    if warning_text not in last_msg.content:
+                        last_msg.content += warning
                 elif isinstance(last_msg.content, list):
                     from qwen_agent.llm.schema import ContentItem
-                    last_msg.content.append(ContentItem(text=warning))
+                    
+                    # Prevent duplicate notifications from stacking
+                    has_notification = any(
+                        isinstance(item, ContentItem) and warning_text in getattr(item, 'text', '')
+                        for item in last_msg.content
+                    )
+                    if not has_notification:
+                        last_msg.content.append(ContentItem(text=warning))
 
 
     @property
@@ -593,20 +616,22 @@ class OrchestratorAgent(Assistant):
     
             active_functions = self._get_active_functions()
             
-            output_stream = self._call_llm(
-                messages=llm_messages,
-                functions=active_functions,
-                extra_generate_cfg=extra_generate_cfg,
-            )
-    
-            output: List[Message] = []
-            for output in output_stream:
-                if output:
-                    yield response + output
-    
-            if not output:
+            # --- Call LLM and handle streaming ---
+            turn_output: List[Message] = []
+            for output in self._call_llm(llm_messages, functions=active_functions, stream=True, extra_generate_cfg=extra_generate_cfg):
+                if self.agent_pool.stopped:
+                    logger.info(f"Agent {self.name} stopped during LLM stream.")
+                    break
+                turn_output = output
+                yield response + turn_output
+            
+            if self.agent_pool.stopped:
+                yield response
                 break
-    
+
+            # Process the FINAL output of this LLM turn
+            output = turn_output
+            
             # --- UPDATE HISTORY ---
             # We must ensure reasoning_content is visible to the LLM in the next turn.
             # Most providers don't support 'reasoning_content' in input history,
@@ -639,7 +664,7 @@ class OrchestratorAgent(Assistant):
                     is_truncated = True
             
             # --- AUTO-CONTINUE ON LENGTH LIMIT ---
-            if is_truncated and self.auto_continue_enabled:
+            if is_truncated and self.auto_continue_enabled and not self.agent_pool.stopped:
                 logger.info(f"Detected message truncation (length limit) for {self.name}. Auto-triggering continuation.")
                 # Increment budget to allow the continuation
                 num_llm_calls_available += 1
@@ -806,7 +831,12 @@ class OrchestratorAgent(Assistant):
             has_thinking = any(out.get('thought') or out.get('reasoning_content') for out in output)
             
             if not used_any_tool:
-                if has_thinking and not has_real_content:
+                if is_truncated:
+                    # Truncated but no tool used? This means the model was cut off mid-sentence.
+                    # We already handled the budget and system prompt injection above,
+                    # so we just need to make sure we don't 'break' here.
+                    pass
+                elif has_thinking and not has_real_content:
                     # It's a pure thinking turn. Continue to the next turn.
                     logger.info(f"Pure reasoning turn detected for {self.name}. Continuing to next turn.")
                     pass
@@ -1033,10 +1063,10 @@ class OrchestratorAgent(Assistant):
         # disabled_tools from the frontend. Sub-agents have their own LLM instances,
         # so we must copy the policy over before running them.
         # ── Propagate agent settings to sub-agent ──
-        if hasattr(agent, 'max_turns') is False:
-            agent.max_turns = getattr(self, 'max_turns', 50)
-        if hasattr(agent, 'auto_continue_enabled') is False:
-            agent.auto_continue_enabled = getattr(self, 'auto_continue_enabled', True)
+        # Always synchronize from the current orchestrator's settings to ensure
+        # mid-session setting changes (e.g. from the UI) are respected.
+        agent.max_turns = getattr(self, 'max_turns', 50)
+        agent.auto_continue_enabled = getattr(self, 'auto_continue_enabled', True)
 
         orchestrator_disabled = getattr(self.llm, 'generate_cfg', {}).get('disabled_tools')
         if orchestrator_disabled and hasattr(agent, 'llm') and agent.llm:
@@ -1083,7 +1113,7 @@ class OrchestratorAgent(Assistant):
                     # Note: self is the OrchestratorAgent instance
                     auto_continue_enabled = getattr(self, 'auto_continue_enabled', True)
                     
-                    if is_truncated and auto_continue_enabled:
+                    if is_truncated and auto_continue_enabled and not self.agent_pool.stopped:
                         logger.info(f"Sub-agent {instance_name} truncated by length limit. Auto-triggering continuation...")
                         cont_msg = Message(role=USER, content="[SYSTEM]: Your previous response was cut off by the token limit. Please continue exactly from where you left off, without repeating yourself.")
                         messages.append(cont_msg)

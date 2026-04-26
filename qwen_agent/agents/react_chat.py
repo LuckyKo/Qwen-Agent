@@ -91,6 +91,8 @@ class ReActChat(FnCallAgent):
             # Accumulate the current response
             if output:
                 response += output[-1].content
+            else:
+                break
 
             has_action, action, action_input, thought = self._detect_tool(output[-1].content)
             if not has_action:

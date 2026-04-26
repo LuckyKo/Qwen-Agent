@@ -22,6 +22,7 @@ import json5
 from qwen_agent.llm.fncall_prompts.base_fncall_prompt import BaseFnCallPrompt
 from qwen_agent.llm.schema import ASSISTANT, FUNCTION, SYSTEM, USER, ContentItem, FunctionCall, Message
 from qwen_agent.log import logger
+from qwen_agent.utils.utils import json_loads, repair_invalid_json
 
 
 class NousFnCallPrompt(BaseFnCallPrompt):
@@ -63,9 +64,13 @@ class NousFnCallPrompt(BaseFnCallPrompt):
                                     arguments = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', arguments.strip())
                                     arguments = re.sub(r'\n?\s*```$', '', arguments)
                                 if arguments.strip():
-                                    arguments = json5.loads(arguments)
+                                    try:
+                                        arguments = json_loads(arguments)
+                                    except Exception:
+                                        # Should already be handled by json_loads's repair
+                                        arguments = arguments 
                         except Exception:
-                            logger.warning(f'Invalid json tool-calling arguments in history: {arguments}')
+                            logger.debug(f'Invalid json tool-calling arguments in history: {arguments}')
                         fc = {'name': fn_call.name, 'arguments': arguments}
                         fc = json.dumps(fc, ensure_ascii=False)
                         fc = f'<tool_call>\n{fc}\n</tool_call>'
@@ -86,7 +91,7 @@ class NousFnCallPrompt(BaseFnCallPrompt):
                             code = para['code']
                             para['code'] = ''
                         except Exception:
-                            logger.warning(f'Invalid code tool arguments in history: {arguments}')
+                            logger.debug(f'Invalid code tool arguments in history: {arguments}')
                             para = {'code': ''}
                             code = str(arguments)
                         fc = {'name': fn_call.name, 'arguments': para}
@@ -252,7 +257,8 @@ class NousFnCallPrompt(BaseFnCallPrompt):
                                 import re
                                 content_to_parse = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', content_to_parse)
                                 content_to_parse = re.sub(r'\n?\s*```$', '', content_to_parse)
-                            fn = json5.loads(content_to_parse)
+                            
+                            fn = json_loads(content_to_parse)
                         except Exception:
                             logger.warning(f'Invalid json tool-calling arguments in response: {one_tool_call_txt[0].strip()}')
                             fn_name, fn_args = extract_fn(one_tool_call_txt[0].strip())
@@ -302,6 +308,7 @@ You are provided with function signatures within <tools></tools> XML tags:
 </tools>
 
 For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+
 <tool_call>
 {{"name": <function-name>, "arguments": <args-json-object>}}
 </tool_call>"""

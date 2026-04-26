@@ -4,25 +4,30 @@ from qwen_agent.tools.base import BaseTool
 
 
 class ReadFile(BaseTool):
-    """Read a file from the workspace (free access - no approval needed)."""
+    """Reads and returns the content of a specified file. Handles text, images, and PDF files."""
 
     name = 'read_file'
-    description = 'Read content from a file in the workspace. Supports pagination via line numbers.'
+    description = ('Reads and returns the content of a specified file. If the file is large, '
+                   'the content will be truncated. The tool\'s response will clearly indicate '
+                   'if truncation has occurred and will provide details on how to read more '
+                   'of the file using the \'offset\' and \'limit\' parameters. Handles text, '
+                   'images (PNG, JPG, GIF, WEBP, SVG, BMP), and PDF files. For text files, '
+                   'it can read specific line ranges.')
     parameters = {
         'type': 'object',
         'properties': {
-            'path': {
+            'absolute_path': {
                 'type': 'string',
-                'description': 'Path to the file relative to workspace directory'
+                'description': "The absolute path to the file to read (e.g., '/home/user/project/file.txt')."
             },
-            'start_line': {
+            'offset': {
                 'type': 'integer',
-                'description': 'The line number to start reading from (1-indexed)',
-                'default': 1
+                'description': "Optional: For text files, the 0-based line number to start reading from. Use for paginating through large files.",
+                'default': 0
             },
             'limit': {
                 'type': 'integer',
-                'description': 'Maximum number of lines to read. Subject to truncation if full_read is false.'
+                'description': "Optional: For text files, maximum number of lines to read. Use with 'offset' to paginate through large files."
             },
             'full_read': {
                 'type': 'boolean',
@@ -30,7 +35,7 @@ class ReadFile(BaseTool):
                 'default': False
             }
         },
-        'required': ['path'],
+        'required': ['absolute_path'],
     }
 
     def __init__(self, cfg=None, **kwargs):
@@ -42,9 +47,29 @@ class ReadFile(BaseTool):
         self.agent_name = kwargs.get('agent_name')
 
     def call(self, params: str, **kwargs) -> str:
+        from qwen_agent.utils.utils import json_loads
+        import json
+        # Mapping for backward compatibility
+        try:
+            if isinstance(params, str):
+                p = json_loads(params)
+                if 'path' in p and 'absolute_path' not in p:
+                    p['absolute_path'] = p['path']
+                if 'start_line' in p and 'offset' not in p:
+                    p['offset'] = p['start_line'] - 1
+                params = json.dumps(p)
+            elif isinstance(params, dict):
+                if 'path' in params and 'absolute_path' not in params:
+                    params['absolute_path'] = params['path']
+                if 'start_line' in params and 'offset' not in params:
+                    params['offset'] = params['start_line'] - 1
+        except:
+            pass
+
         params = self._verify_json_format_args(params)
-        path = params['path']
-        start_line = params.get('start_line', 1)
+        path = params.get('absolute_path')
+        offset = params.get('offset', 0)
+        start_line = params.get('start_line', offset + 1)
         limit = params.get('limit')
         full_read = params.get('full_read', False)
 
@@ -187,29 +212,30 @@ class ViewImage(BaseTool):
 
 
 class WriteFile(BaseTool):
-    """Create a new file in the workspace."""
+    """Writes content to a specified file in the local filesystem."""
 
     name = 'write_file'
-    description = ('Create a NEW file in the workspace. This is auto-approved. '
-                   'To edit existing files, use edit_file instead. Overwriting an '
-                   'existing file not owned by you requires user approval.')
+    description = ('Writes content to a specified file in the local filesystem. '
+                   'This is auto-approved for new files. To edit existing files, '
+                   'use edit_file instead. Overwriting an existing file not owned '
+                   'by you requires user approval.')
     parameters = {
         'type': 'object',
         'properties': {
-            'path': {
+            'file_path': {
                 'type': 'string',
-                'description': 'Path to the file relative to workspace directory'
+                'description': "The absolute path to the file to write to (e.g., '/home/user/project/file.txt')."
             },
             'content': {
                 'type': 'string',
-                'description': 'Content to write to the file'
+                'description': 'The content to write to the file. Can be raw text or a markdown code block.'
             },
             'justification': {
                 'type': 'string',
                 'description': 'Why you need to create this file'
             }
         },
-        'required': ['path', 'content'],
+        'required': ['file_path', 'content'],
     }
 
     def __init__(self, cfg=None, **kwargs):
@@ -221,9 +247,42 @@ class WriteFile(BaseTool):
         self.agent_name = kwargs.get('agent_name')
 
     def call(self, params: str, **kwargs) -> str:
-        params = self._verify_json_format_args(params)
-        path = params['path']
-        content = params['content']
+        import re
+        import json
+        from qwen_agent.utils.utils import extract_code, json_loads
+
+        # --- Robust Fallback for Non-JSON Input ---
+        if isinstance(params, str) and not params.strip().startswith('{'):
+            match = re.search(r'^(?:path:?\s*)?([^\n`]+)\s*?\n*?```[^\n]*\n(.*?)\n?```', params.strip(), re.DOTALL | re.IGNORECASE)
+            if match:
+                path = match.group(1).strip()
+                content = match.group(2)
+                return self.agent_pool.operation_manager.write_file(
+                    path=path,
+                    content=content,
+                    agent_name=self.agent_name,
+                )
+
+        # Mapping for backward compatibility
+        try:
+            if isinstance(params, str):
+                p = json_loads(params)
+                if 'path' in p and 'file_path' not in p:
+                    p['file_path'] = p['path']
+                params = json.dumps(p)
+            elif isinstance(params, dict):
+                if 'path' in params and 'file_path' not in params:
+                    params['file_path'] = params['path']
+        except:
+            pass
+
+        # --- Standard JSON Path ---
+        params_json = self._verify_json_format_args(params)
+        path = params_json.get('file_path')
+        content = params_json.get('content', '')
+
+        # Strip accidental markdown wrappers inside the JSON content
+        content = extract_code(content)
 
         return self.agent_pool.operation_manager.write_file(
             path=path,
@@ -233,36 +292,38 @@ class WriteFile(BaseTool):
 
 
 class EditFile(BaseTool):
-    """Edit an existing file (requires user approval)."""
+    """Replaces text within a file."""
 
     name = 'edit_file'
-    description = ('Edit an EXISTING file. Requires user approval before changes are applied '
-                   'for any files not owned by the current agent. Editing files you created in this session is auto-approved.')
+    description = ('Replaces text within a file. By default, replaces a single occurrence. '
+                   'Requires user approval before changes are applied for any files not '
+                   'owned by the current agent. Always use the read_file tool to examine '
+                   'the file\'s current content before attempting a text replacement.')
     parameters = {
         'type': 'object',
         'properties': {
-            'path': {
+            'file_path': {
                 'type': 'string',
-                'description': 'Path to the file relative to workspace directory'
+                'description': "The absolute path to the file to modify."
             },
-            'old_content': {
+            'old_string': {
                 'type': 'string',
-                'description': 'The EXACT unique block of text to be replaced.'
+                'description': 'The EXACT literal text to replace (including all whitespace, indentation, newlines, etc.).'
             },
-            'new_content': {
+            'new_string': {
                 'type': 'string',
-                'description': 'The new text to insert.'
+                'description': 'The exact literal text to replace old_string with.'
             },
             'full_content': {
                 'type': 'string',
-                'description': 'Optional: use ONLY if you must overwrite the entire file (discouraged for large files).'
+                'description': 'Optional: use ONLY if you must overwrite the entire file.'
             },
             'justification': {
                 'type': 'string',
                 'description': 'Why you need to edit this file'
             }
         },
-        'required': ['path'],
+        'required': ['file_path'],
     }
 
     def __init__(self, cfg=None, **kwargs):
@@ -274,39 +335,69 @@ class EditFile(BaseTool):
         self.agent_name = kwargs.get('agent_name')
 
     def call(self, params: str, **kwargs) -> str:
-        params = self._verify_json_format_args(params)
-        path = params['path']
-        old_content = params.get('old_content')
-        new_content = params.get('new_content')
-        full_content = params.get('full_content')
+        import json
+        from qwen_agent.utils.utils import extract_code, json_loads
+        
+        # Mapping for backward compatibility
+        try:
+            if isinstance(params, str):
+                p = json_loads(params)
+                if 'path' in p and 'file_path' not in p:
+                    p['file_path'] = p['path']
+                if 'old_content' in p and 'old_string' not in p:
+                    p['old_string'] = p['old_content']
+                if 'new_content' in p and 'new_string' not in p:
+                    p['new_string'] = p['new_content']
+                params = json.dumps(p)
+            elif isinstance(params, dict):
+                if 'path' in params and 'file_path' not in params:
+                    params['file_path'] = params['path']
+                if 'old_content' in params and 'old_string' not in params:
+                    params['old_string'] = params['old_content']
+                if 'new_content' in params and 'new_string' not in params:
+                    params['new_string'] = params['new_content']
+        except:
+            pass
+
+        params_json = self._verify_json_format_args(params)
+        path = params_json.get('file_path')
+        old_string = params_json.get('old_string')
+        new_string = params_json.get('new_string')
+        full_content = params_json.get('full_content')
 
         # Backward compatibility for models that still send 'content' instead of old/new
-        if 'content' in params and not old_content:
-            full_content = params['content']
+        if 'content' in params_json and not old_string:
+            full_content = params_json['content']
+
+        # Robustly handle code blocks in new content
+        if new_string:
+            new_string = extract_code(new_string)
+        if full_content:
+            full_content = extract_code(full_content)
 
         return self.agent_pool.operation_manager.edit_file(
             path=path,
             agent_name=self.agent_name,
-            old_content=old_content,
-            new_content=new_content,
+            old_content=old_string,
+            new_content=new_string,
             full_content=full_content,
         )
 
 
 class ListDir(BaseTool):
-    """List contents of a directory in the workspace."""
+    """Lists the names of files and subdirectories directly within a specified directory path."""
 
     name = 'list_dir'
-    description = 'List all files and directories in a given path. Like `ls` or `dir` command.'
+    description = 'Lists the names of files and subdirectories directly within a specified directory path.'
     parameters = {
         'type': 'object',
         'properties': {
             'path': {
                 'type': 'string',
-                'description': 'Directory path relative to workspace (default: ".")'
+                'description': 'The absolute path to the directory to list (must be absolute, not relative)'
             }
         },
-        'required': [],
+        'required': ['path'],
     }
 
     def __init__(self, cfg=None, **kwargs):

@@ -53,34 +53,39 @@ class QwenVLChatAtOAI(TextChatAtOAI):
                 if t == 'text' and v:
                     new_content.append({'type': 'text', 'text': v})
                 if t in ['image', 'video', 'audio']:
-                    if isinstance(v, str):
-                        v = conv_multimodel_value(t, v)
-                    if isinstance(v, list):
-                        new_v = []
-                        for _v in v:
-                            new_v.append(conv_multimodel_value(t, _v))
-                        v = new_v
-                    if isinstance(v, dict):
-                        v['data'] = conv_multimodel_value(t, v['data'])
-
-                    if t == 'image':
-                        new_content.append({'type': 'image_url', 'image_url': {'url': v}})
-                    elif t == 'video':
+                    try:
                         if isinstance(v, str):
-                            new_content.append({'type': 'video_url', 'video_url': {'url': v}})
-                        elif isinstance(v, list):
-                            new_content.append({'type': 'video', 'video': v})
-                        else:
-                            raise TypeError
-                    elif t == 'audio':
-                        if isinstance(v, str):
-                            new_content.append({'type': 'input_audio', 'input_audio': {'data': v}})
-                        elif isinstance(v, dict):
-                            new_content.append({'type': 'input_audio', 'input_audio': v})
-                        else:
-                            raise TypeError
-                    else:
-                        raise TypeError
+                            v = conv_multimodel_value(t, v)
+                        if isinstance(v, list):
+                            new_v = []
+                            for _v in v:
+                                new_v.append(conv_multimodel_value(t, _v))
+                            v = new_v
+                        if isinstance(v, dict):
+                            v['data'] = conv_multimodel_value(t, v['data'])
+    
+                        if t == 'image':
+                            new_content.append({'type': 'image_url', 'image_url': {'url': v}})
+                        elif t == 'video':
+                            if isinstance(v, str):
+                                new_content.append({'type': 'video_url', 'video_url': {'url': v}})
+                            elif isinstance(v, list):
+                                new_content.append({'type': 'video', 'video': v})
+                            else:
+                                raise TypeError
+                        elif t == 'audio':
+                            if isinstance(v, str):
+                                new_content.append({'type': 'input_audio', 'input_audio': {'data': v}})
+                            elif isinstance(v, dict):
+                                new_content.append({'type': 'input_audio', 'input_audio': v})
+                            else:
+                                raise TypeError
+                    except (ModelServiceError, TypeError) as e:
+                        err_msg = str(e)
+                        logger.warning(f'Multimodal item error: {err_msg}')
+                        # Provide feedback to the agent about the missing file
+                        new_content.append({'type': 'text', 'text': f'\n[System Error: {err_msg} - This multimodal item was skipped and is invisible to the LLM]\n'})
+                        continue
 
             new_msg = msg.model_dump()
             new_msg['content'] = new_content

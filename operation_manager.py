@@ -13,6 +13,7 @@ import os
 import re
 import uuid
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
@@ -125,9 +126,19 @@ class OperationManager:
         with self._lock:
             self.pending[request_id] = approval
 
-        # Block until user responds or timeout
-        timeout_val = APPROVAL_TIMEOUT_SECONDS if self.enable_timeout else None
-        got_response = approval.event.wait(timeout=timeout_val)
+        # Block until user responds, timeout, or agent is stopped
+        timeout_val = APPROVAL_TIMEOUT_SECONDS if self.enable_timeout else 3600
+        start_time = time.time()
+        got_response = False
+        
+        while time.time() - start_time < timeout_val:
+            if self.agent_pool and getattr(self.agent_pool, 'stopped', False):
+                break
+            
+            # Wait in small increments to remain responsive to stopped flag
+            if approval.event.wait(timeout=1.0):
+                got_response = True
+                break
 
         # Clean up
         with self._lock:

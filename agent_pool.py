@@ -181,11 +181,28 @@ rules:
                 
                 if 'generate_cfg' in update_data:
                     agent.llm.generate_cfg.update(update_data['generate_cfg'])
+                    # Also update top-level keys in update_data that are not 'generate_cfg'
+                    # but might be sampling params (some code puts them at top level)
+                    for k, v in update_data.items():
+                        if k not in ['generate_cfg', 'model', 'model_type', 'api_key', 'api_base', 'base_url', 'model_server']:
+                            agent.llm.generate_cfg[k] = v
+                else:
+                    # Flat config from WebUI, update generate_cfg directly
+                    # but skip top-level LLM identity keys
+                    for k, v in update_data.items():
+                        if k not in ['model', 'model_type', 'api_key', 'api_base', 'base_url', 'model_server']:
+                            agent.llm.generate_cfg[k] = v
                 
                 # Also update other relevant top-level attributes if necessary
                 for attr in ['model', 'model_type', 'api_key']:
                     if attr in update_data:
                         setattr(agent.llm, attr, update_data[attr])
+                if 'api_base' in update_data or 'base_url' in update_data or 'model_server' in update_data:
+                    val = update_data.get('api_base') or update_data.get('base_url') or update_data.get('model_server')
+                    if hasattr(agent.llm, 'api_base'):
+                        agent.llm.api_base = val
+                    if hasattr(agent.llm, 'base_url'):
+                        agent.llm.base_url = val
         logger.debug("Propagated LLM config changes to all active agents in the pool.")
     
     def list_agents(self) -> List[str]:

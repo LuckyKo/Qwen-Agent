@@ -220,14 +220,22 @@ class TextChatAtOAI(BaseFnCallModel):
                                                 extra={'function_id': tc.id}))
 
                         res = []
+                        finish_reason = getattr(chunk.choices[0], 'finish_reason', None)
+                        extra = {'finish_reason': finish_reason} if finish_reason else {}
+                        
                         if full_reasoning_content:
-                            res.append(Message(role=ASSISTANT, content='', reasoning_content=full_reasoning_content))
+                            res.append(Message(role=ASSISTANT, content='', reasoning_content=full_reasoning_content, extra=extra))
                         if full_response:
                             res.append(Message(
                                 role=ASSISTANT,
                                 content=full_response,
+                                extra=extra
                             ))
                         if full_tool_calls:
+                            for tc in full_tool_calls:
+                                if not tc.extra:
+                                    tc.extra = {}
+                                tc.extra.update(extra)
                             res += full_tool_calls
                         yield res
         except OpenAIError as ex:
@@ -242,14 +250,17 @@ class TextChatAtOAI(BaseFnCallModel):
         local_model = generate_cfg.pop('model', self.model)
         try:
             response = self._chat_complete_create(model=local_model, messages=messages, stream=False, **generate_cfg)
+            finish_reason = getattr(response.choices[0], 'finish_reason', None)
+            extra = {'finish_reason': finish_reason} if finish_reason else {}
             if hasattr(response.choices[0].message, 'reasoning_content'):
                 return [
                     Message(role=ASSISTANT,
                             content=response.choices[0].message.content,
-                            reasoning_content=response.choices[0].message.reasoning_content)
+                            reasoning_content=response.choices[0].message.reasoning_content,
+                            extra=extra)
                 ]
             else:
-                return [Message(role=ASSISTANT, content=response.choices[0].message.content)]
+                return [Message(role=ASSISTANT, content=response.choices[0].message.content, extra=extra)]
         except OpenAIError as ex:
             raise ModelServiceError(exception=ex)
 

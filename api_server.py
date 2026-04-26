@@ -144,7 +144,14 @@ def get_agent_max_tokens(agent) -> int:
 # ─── Message serialization ────────────────────────────────────────────────────
 
 def serialize_message(msg, index=None):
-    """Convert a Message object or dict to a JSON-serializable dict."""
+    """Convert a Message object or dict to a JSON-serializable dict with caching."""
+    # Use cache if available to avoid expensive re-serialization of large history messages
+    if isinstance(msg, dict) and '_ui_cache' in msg:
+        res = dict(msg['_ui_cache'])
+        if index is not None:
+            res['index'] = index
+        return res
+
     if hasattr(msg, 'model_dump'):
         d = msg.model_dump()
     elif isinstance(msg, dict):
@@ -179,6 +186,12 @@ def serialize_message(msg, index=None):
             elif hasattr(item, 'image') and item.image:
                 parts.append(f"![image]({item.image})")
         content = '\n'.join(parts)
+    
+    # UI Performance: Truncate exceptionally large content at the wire level.
+    # The full content is still preserved in the backend 'history' and persistent logs.
+    if isinstance(content, str) and len(content) > 100000:
+        content = content[:100000] + "\n\n... [TRUNCATED IN UI FOR PERFORMANCE. Full content is available in the session logs.]"
+    
     d['content'] = content or ''
 
     # Normalize function_call
@@ -195,6 +208,13 @@ def serialize_message(msg, index=None):
         if d[key] is None:
             del d[key]
     d.pop('extra', None)
+    
+    # UI Performance: Store in cache if the input is a persistent history dict.
+    # CRITICAL: We DO NOT cache if it's the very last message in the list,
+    # as the orchestrator often mutates the latest turn's messages (merging reasoning, 
+    # async injections, etc.) and we don't want the UI to "hang" on a stale version.
+    if isinstance(msg, dict) and index is not None and index > 0:
+        msg['_ui_cache'] = dict(d)
 
     if index is not None:
         d['index'] = index
@@ -399,11 +419,38 @@ def create_app(agents, agent_pool, config=None):
 
             # Inject ui sampling params securely
             ui_cfg = copy.deepcopy(session.get('generate_cfg', {}))
-            if 'repeat_penalty' in ui_cfg:
-                pen = ui_cfg.pop('repeat_penalty')
-                ui_cfg['repetition_penalty'] = pen
-                ui_cfg['repeat_penalty'] = pen
-                ui_cfg['repeatPenalty'] = pen
+            
+            # Helper to cast and normalize config
+            def sanitize_cfg(cfg: dict):
+                # Type casting for standard sampling params
+                floats = ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty', 'repetition_penalty', 'repeat_penalty', 'repeatPenalty', 'min_p']
+                ints = ['max_tokens', 'max_completion_tokens', 'top_k', 'seed', 'max_input_tokens', 'max_turns', 'read_file_limit']
+                
+                new_cfg = {}
+                for k, v in cfg.items():
+                    try:
+                        if k in floats and v is not None:
+                            new_cfg[k] = float(v)
+                        elif k in ints and v is not None:
+                            new_cfg[k] = int(float(v)) # handle "100.0" as int
+                        else:
+                            new_cfg[k] = v
+                    except (ValueError, TypeError):
+                        new_cfg[k] = v
+                
+                # Normalization
+                if 'repeat_penalty' in new_cfg:
+                    pen = new_cfg['repeat_penalty']
+                    new_cfg['repetition_penalty'] = pen
+                    new_cfg['repeatPenalty'] = pen
+                
+                # Mapping max_tokens (some UIs might send it as maxTokens or something else)
+                if 'maxTokens' in new_cfg:
+                    new_cfg['max_tokens'] = new_cfg.pop('maxTokens')
+                
+                return new_cfg
+
+            ui_cfg = sanitize_cfg(ui_cfg)
 
             # Strip non-sampling params before updating LLM config
             mcp_servers = ui_cfg.pop('mcpServers', None)
@@ -462,7 +509,7 @@ def create_app(agents, agent_pool, config=None):
 
                     responses = partial
                     now = time.time()
-                    if now - last_send > 0.08:  # ~12Hz throttle
+                    if now - last_send > 0.15:  # ~6.5Hz throttle (prevents saturating UI thread with large payloads)
                         state = build_state(responses, generating=True)
                         asyncio.run_coroutine_threadsafe(
                             send_queue.put({'type': 'state', **state}), loop
@@ -576,6 +623,7 @@ def create_app(agents, agent_pool, config=None):
     @app.post("/api/reset")
     async def api_reset():
         session['history'] = []
+        _save_session_history() # Ensure persistent file is cleared
         session['generating'] = False
         session['generation_id'] += 1
         if agent_pool:

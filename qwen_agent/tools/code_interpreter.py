@@ -84,7 +84,7 @@ class CodeInterpreter(BaseToolWithFileAccess):
         'type': 'object',
         'properties': {
             'code': {
-                'description': 'The python code.',
+                'description': 'The python code to execute. Can be raw text or a markdown code block.',
                 'type': 'string',
             }
         },
@@ -112,13 +112,14 @@ class CodeInterpreter(BaseToolWithFileAccess):
         return fmt
 
     def call(self, params: Union[str, dict], files: List[str] = None, timeout: Optional[int] = 30, **kwargs) -> str:
+        from qwen_agent.utils.utils import json_loads
         super().call(params=params, files=files)  # copy remote files to work_dir
 
         if isinstance(params, dict):
             code = params.get('code', '')
         else:
             try:
-                params_dict = json5.loads(params)
+                params_dict = json_loads(params)
                 code = params_dict['code']
             except Exception:
                 code = extract_code(params)
