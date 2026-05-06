@@ -168,7 +168,45 @@ class CodeInterpreter(BaseToolWithFileAccess):
         if timeout:
             self._execute_code(kc, '_M6CountdownTimer.cancel()')
 
-        return result if result.strip() else 'Finished execution.'
+        if not result.strip():
+            return 'Finished execution.'
+
+        # Get the truncation limit from agent/tool options
+        char_limit = 2000
+        agent_obj = kwargs.get('agent_obj')
+        agent_pool = getattr(agent_obj, 'agent_pool', None)
+        
+        if agent_pool:
+            llm_cfg = getattr(agent_pool, 'llm_cfg', {})
+            char_limit = llm_cfg.get('code_char_limit', char_limit)
+        elif self.cfg.get('code_char_limit'):
+            char_limit = self.cfg.get('code_char_limit')
+
+        if char_limit != -1 and len(result) > char_limit:
+            from datetime import datetime
+            # Save full result to spill file
+            log_dir = Path('workspace/logs')
+            log_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            instance_name = kwargs.get('agent_instance_name', 'unknown')
+            safe_instance = instance_name.replace('/', '_').replace('\\', '_')
+            spill_filename = f"{safe_instance}_code_{timestamp}.txt"
+            spill_path = log_dir / spill_filename
+            
+            try:
+                spill_path.write_text(result, encoding='utf-8')
+                rel_spill = str(spill_path)
+                if agent_pool and agent_pool.operation_manager:
+                    try:
+                        rel_spill = str(spill_path.relative_to(agent_pool.operation_manager.base_dir))
+                    except ValueError:
+                        pass
+            except Exception as e:
+                rel_spill = f"ERROR SAVING SPILL: {e}"
+
+            result = result[:char_limit] + f"\n\n[TOOL RESPONSE TRUNCATED — Character limit exceeded. Full output saved to: {rel_spill}]"
+
+        return result
 
     def __del__(self):
         # Recycle the jupyter subprocess and Docker container:

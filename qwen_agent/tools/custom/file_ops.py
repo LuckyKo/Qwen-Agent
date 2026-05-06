@@ -465,7 +465,17 @@ class Grep(BaseTool):
         pattern = params['pattern']
         path = params.get('path', '.')
         include = params.get('include', '*')
-        return self.agent_pool.operation_manager.grep(pattern, path, include)
+
+        # Get the truncation limit from agent/tool options
+        char_limit = 2000
+        if hasattr(self, 'agent_pool') and self.agent_pool:
+            llm_cfg = getattr(self.agent_pool, 'llm_cfg', {})
+            char_limit = llm_cfg.get('grep_char_limit', char_limit)
+        elif self.cfg.get('grep_char_limit'):
+            char_limit = self.cfg.get('grep_char_limit')
+
+        agent_name = kwargs.get('agent_instance_name', 'unknown')
+        return self.agent_pool.operation_manager.grep(pattern, path, include, char_limit=int(char_limit), agent_name=agent_name)
 
 
 class DeleteFile(BaseTool):

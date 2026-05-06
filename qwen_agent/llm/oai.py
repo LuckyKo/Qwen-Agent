@@ -178,6 +178,11 @@ class TextChatAtOAI(BaseFnCallModel):
         messages = self.convert_messages_to_dicts(messages)
         logger.debug(f'LLM Input generate_cfg: \n{generate_cfg}')
         local_model = generate_cfg.pop('model', self.model)
+        
+        # Filter out custom agent settings that are not intended for the LLM API
+        for k in ['max_turns', 'auto_continue', 'read_file_limit', 'grep_char_limit', 'shell_char_limit', 'code_char_limit', 'work_access_folders', 'mcpServers']:
+            generate_cfg.pop(k, None)
+            
         try:
             response = self._chat_complete_create(model=local_model, messages=messages, stream=True, **generate_cfg)
             if delta_stream:
@@ -248,6 +253,11 @@ class TextChatAtOAI(BaseFnCallModel):
     ) -> List[Message]:
         messages = self.convert_messages_to_dicts(messages)
         local_model = generate_cfg.pop('model', self.model)
+
+        # Filter out custom agent settings that are not intended for the LLM API
+        for k in ['max_turns', 'auto_continue', 'read_file_limit', 'grep_char_limit', 'shell_char_limit', 'code_char_limit', 'work_access_folders', 'mcpServers']:
+            generate_cfg.pop(k, None)
+
         try:
             response = self._chat_complete_create(model=local_model, messages=messages, stream=False, **generate_cfg)
             finish_reason = getattr(response.choices[0], 'finish_reason', None)

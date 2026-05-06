@@ -113,6 +113,9 @@ const ranges = [
   { input: $('#setting-presence-penalty'), output: $('#val-presence-penalty') },
   { input: $('#setting-frequency-penalty'), output: $('#val-frequency-penalty') },
   { input: $('#setting-read-file-limit'), output: $('#val-read-file-limit') },
+  { input: $('#setting-grep-char-limit'), output: $('#val-grep-char-limit') },
+  { input: $('#setting-shell-char-limit'), output: $('#val-shell-char-limit') },
+  { input: $('#setting-code-char-limit'), output: $('#val-code-char-limit') },
 ];
 
 // ── Initialization ───────────────────────────────────────────────────────────
@@ -132,6 +135,18 @@ if (btnToggleSidebar && appSidebar) {
     appSidebar.classList.toggle('collapsed');
   });
 }
+
+// Collapsible sub-sections
+document.querySelectorAll('.sidebar-label, .settings-section-title').forEach(el => {
+  el.addEventListener('click', (e) => {
+    const section = e.target.closest('.sidebar-section') || 
+                    e.target.closest('.sessions-section') || 
+                    e.target.closest('.settings-section');
+    if (section) {
+      section.classList.toggle('collapsed');
+    }
+  });
+});
 
 // Session Manager DOM refs
 const refreshSessionsBtn = $('#refreshSessionsBtn');
@@ -1905,6 +1920,9 @@ function getGenerateCfg() {
   if ($('#setting-max-turns')) cfg.max_turns = parseInt($('#setting-max-turns').value) || 50;
   if ($('#setting-auto-continue')) cfg.auto_continue = $('#setting-auto-continue').checked;
   if ($('#setting-read-file-limit')) cfg.read_file_limit = parseInt($('#setting-read-file-limit').value) || 1000;
+  if ($('#setting-grep-char-limit')) cfg.grep_char_limit = parseInt($('#setting-grep-char-limit').value);
+  if ($('#setting-shell-char-limit')) cfg.shell_char_limit = parseInt($('#setting-shell-char-limit').value);
+  if ($('#setting-code-char-limit')) cfg.code_char_limit = parseInt($('#setting-code-char-limit').value);
 
   if ($('#setting-mcp-servers') && $('#setting-mcp-servers').value.trim()) {
     try {
@@ -1914,8 +1932,8 @@ function getGenerateCfg() {
     }
   }
 
-  if ($('#workAccessFolders') && $('#workAccessFolders').value.trim()) {
-    cfg.work_access_folders = $('#workAccessFolders').value.trim().split('\n').map(s => s.trim()).filter(s => s);
+  if ($('#workAccessFolders')) {
+    cfg.work_access_folders = $('#workAccessFolders').value.trim() ? $('#workAccessFolders').value.trim().split('\n').map(s => s.trim()).filter(s => s) : [];
   }
 
   if (typeof agentDisabledTools !== 'undefined') {

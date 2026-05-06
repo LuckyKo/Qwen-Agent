@@ -17,6 +17,10 @@ class ShellCmd(BaseTool):
             'justification': {
                 'type': 'string',
                 'description': 'Why you need to execute this command.'
+            },
+            'cwd': {
+                'type': 'string',
+                'description': 'Optional working directory, relative to workspace root.'
             }
         },
         'required': ['command', 'justification'],
@@ -44,9 +48,22 @@ class ShellCmd(BaseTool):
         params = self._verify_json_format_args(params)
         command = params['command']
         justification = params.get('justification', 'No justification provided.')
+        cwd = params.get('cwd', '.')
+
+        # Get the truncation limit from agent/tool options
+        char_limit = 2000
+        if hasattr(self, 'agent_pool') and self.agent_pool:
+            llm_cfg = getattr(self.agent_pool, 'llm_cfg', {})
+            char_limit = llm_cfg.get('shell_char_limit', char_limit)
+        elif self.cfg.get('shell_char_limit'):
+            char_limit = self.cfg.get('shell_char_limit')
+
+        agent_name = kwargs.get('agent_instance_name') or self.agent_name
 
         return self.agent_pool.operation_manager.execute_shell_command(
             command=command,
             justification=justification,
-            agent_name=self.agent_name,
+            agent_name=agent_name,
+            cwd=cwd,
+            char_limit=int(char_limit),
         )

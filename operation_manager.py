@@ -230,25 +230,22 @@ class OperationManager:
 
     def _resolve_path(self, path: str) -> Path:
         """Resolve a path to be within the base directory or extra folders (security)."""
-        try:
-            resolved = (self.base_dir / path).resolve()
-            
-            # Check if it starts with base_dir
-            if str(resolved).startswith(str(self.base_dir)):
+        resolved = (self.base_dir / path).resolve()
+        
+        # Check if it starts with base_dir
+        if str(resolved).startswith(str(self.base_dir)):
+            return resolved
+        if os.name == 'nt' and str(resolved).lower().startswith(str(self.base_dir).lower()):
+            return resolved
+
+        # Check extra work folders
+        for extra in self.extra_work_folders:
+            if str(resolved).startswith(str(extra)):
                 return resolved
-            if os.name == 'nt' and str(resolved).lower().startswith(str(self.base_dir).lower()):
+            if os.name == 'nt' and str(resolved).lower().startswith(str(extra).lower()):
                 return resolved
 
-            # Check extra work folders
-            for extra in self.extra_work_folders:
-                if str(resolved).startswith(str(extra)):
-                    return resolved
-                if os.name == 'nt' and str(resolved).lower().startswith(str(extra).lower()):
-                    return resolved
-
-            raise ValueError(f"Path '{path}' is outside the allowed directories")
-        except Exception:
-            return (self.base_dir / path).resolve()
+        raise ValueError(f"Path '{path}' is outside the allowed directories")
 
     # ─── Read Operations (Free Access) ────────────────────────────────────
 
@@ -292,7 +289,7 @@ class OperationManager:
         except Exception as e:
             return f"Error listing directory: {str(e)}"
 
-    def grep(self, pattern: str, path: str = ".", include: str = "*") -> str:
+    def grep(self, pattern: str, path: str = ".", include: str = "*", char_limit: int = 2000, agent_name: str = "unknown") -> str:
         """Search for text pattern in files."""
         try:
             resolved = self._resolve_path(path)
@@ -314,7 +311,7 @@ class OperationManager:
                                 except ValueError:
                                     rel_path = file_path.name # Fallback
                                 results.append(f"{rel_path}:{line_num}: {line.strip()}")
-                        if len(results) > 100: # Practical limit
+                        if len(results) > 5000: # Safety limit to prevent OOM
                             break
                     except:
                         continue
@@ -323,9 +320,30 @@ class OperationManager:
                 return f"No matches found for pattern '{pattern}' in {path}/**/{include}"
 
             summary = f"Found {len(results)} matches for '{pattern}'"
-            if len(results) > 50:
-                summary += " (showing first 50)"
-            return f"{summary}:\n\n" + '\n'.join(results[:50])
+            output_text = '\n'.join(results)
+            
+            if char_limit != -1 and len(output_text) > char_limit:
+                # Save full result to spill file
+                log_dir = self.base_dir / 'logs'
+                log_dir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                safe_agent = agent_name.replace('/', '_').replace('\\', '_')
+                spill_filename = f"{safe_agent}_grep_{timestamp}.txt"
+                spill_path = log_dir / spill_filename
+                
+                try:
+                    spill_path.write_text(output_text, encoding='utf-8')
+                    try:
+                        rel_spill = str(spill_path.relative_to(self.base_dir))
+                    except ValueError:
+                        rel_spill = str(spill_path)
+                except Exception as e:
+                    rel_spill = f"ERROR SAVING SPILL: {e}"
+
+                output_text = output_text[:char_limit] + f"\n\n[TOOL RESPONSE TRUNCATED — Character limit exceeded. Full output saved to: {rel_spill}]"
+                summary += " [TRUNCATED]"
+
+            return f"{summary}:\n\n" + output_text
         except Exception as e:
             return f"Error searching: {str(e)}"
 
@@ -333,7 +351,10 @@ class OperationManager:
 
     def write_file(self, path: str, content: str, agent_name: str) -> str:
         """Write a file — auto-approved for new files and owned files."""
-        resolved = self._resolve_path(path)
+        try:
+            resolved = self._resolve_path(path)
+        except Exception as e:
+            return f"ERROR: {str(e)}"
         is_new = not resolved.exists()
 
         if not self._is_auto_approved(path, agent_name, creating_new=True):
@@ -361,7 +382,10 @@ class OperationManager:
                   new_content: Optional[str] = None,
                   full_content: Optional[str] = None) -> str:
         """Edit a file — auto-approved for agent-owned files."""
-        resolved = self._resolve_path(path)
+        try:
+            resolved = self._resolve_path(path)
+        except Exception as e:
+            return f"ERROR: {str(e)}"
 
         if full_content is not None:
             description = f"Overwrite file: {path}"
@@ -430,7 +454,10 @@ class OperationManager:
 
     def delete_file(self, path: str, agent_name: str) -> str:
         """Delete a file — auto-approved for agent-owned files."""
-        resolved = self._resolve_path(path)
+        try:
+            resolved = self._resolve_path(path)
+        except Exception as e:
+            return f"ERROR: {str(e)}"
         if not resolved.exists():
             return f"File not found: {path}"
 
@@ -459,7 +486,11 @@ class OperationManager:
 
     def copy_file(self, source: str, destination: str, agent_name: str) -> str:
         """Copy a file — auto-approved if destination is new or agent-owned."""
-        src_path = self._resolve_path(source)
+        try:
+            src_path = self._resolve_path(source)
+            dest_path_check = self._resolve_path(destination)
+        except Exception as e:
+            return f"ERROR: {str(e)}"
         if not src_path.exists():
             return f"Source not found: {source}"
 
@@ -489,7 +520,11 @@ class OperationManager:
 
     def move_file(self, source: str, destination: str, agent_name: str) -> str:
         """Move a file — auto-approved if source is agent-owned."""
-        src_path = self._resolve_path(source)
+        try:
+            src_path = self._resolve_path(source)
+            dest_path_check = self._resolve_path(destination)
+        except Exception as e:
+            return f"ERROR: {str(e)}"
         if not src_path.exists():
             return f"Source not found: {source}"
 
@@ -516,14 +551,23 @@ class OperationManager:
         except Exception as e:
             return f"ERROR: Approved but execution failed: {str(e)}"
 
-    def execute_shell_command(self, command: str, justification: str, agent_name: str) -> str:
+    def execute_shell_command(self, command: str, justification: str, agent_name: str, cwd: str = ".", char_limit: int = 2000) -> str:
         """Execute a shell command — NEVER auto-approved, always requires user approval."""
-        description = f"Execute Shell Command:\n```bash\n{command}\n```\nJustification: {justification}"
+        try:
+            resolved_cwd = self._resolve_path(cwd)
+        except Exception as e:
+            return f"ERROR: Invalid working directory: {str(e)}"
+
+        description = (
+            f"⚠️ **SECURITY WARNING**: This is a host shell command. It can potentially bypass folder restrictions!\n\n"
+            f"**CWD**: {resolved_cwd}\n"
+            f"**Execute Shell Command**:\n```bash\n{command}\n```\n**Justification**: {justification}"
+        )
         
         approved, reason = self.request_user_approval(
             agent_name=agent_name,
             tool_name='shell_cmd',
-            tool_args={'command': command, 'justification': justification},
+            tool_args={'command': command, 'justification': justification, 'cwd': cwd},
             description=description,
         )
         
@@ -536,7 +580,7 @@ class OperationManager:
             # Execute the command in the workspace directory
             result = subprocess.run(
                 command,
-                cwd=str(self.base_dir),
+                cwd=str(resolved_cwd),
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -556,8 +600,30 @@ class OperationManager:
                 
             if not output.strip():
                 output = "No output produced."
+            
+            final_output = output
+            if char_limit != -1 and len(output) > char_limit:
+                # Save full result to spill file
+                log_dir = self.base_dir / 'logs'
+                log_dir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                safe_agent = agent_name.replace('/', '_').replace('\\', '_')
+                spill_filename = f"{safe_agent}_shell_{timestamp}.txt"
+                spill_path = log_dir / spill_filename
                 
-            return f"APPROVED: {status}\n\n{output}"
+                try:
+                    spill_path.write_text(output, encoding='utf-8')
+                    try:
+                        rel_spill = str(spill_path.relative_to(self.base_dir))
+                    except ValueError:
+                        rel_spill = str(spill_path)
+                except Exception as e:
+                    rel_spill = f"ERROR SAVING SPILL: {e}"
+
+                final_output = output[:char_limit] + f"\n\n[TOOL RESPONSE TRUNCATED — Character limit exceeded. Full output saved to: {rel_spill}]"
+                status += " [TRUNCATED]"
+
+            return f"APPROVED: {status}\n\n{final_output}"
             
         except subprocess.TimeoutExpired:
             return "ERROR: Command timed out after 120 seconds."
