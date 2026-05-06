@@ -13,7 +13,10 @@ class CompressContext(BaseTool):
     name = 'compress_context'
     description = (
         'Summarize the oldest part of the conversation history to free up context space. '
-        'The specified fraction of the history (e.g. 0.5 for 50%) '
+        'Supports two modes:\n'
+        '- auto (default): The tool generates a summary via LLM internally.\n'
+        '- manual: You (the agent) provide your own summary text via the "summary_text" parameter.\n'
+        'In both cases, the specified fraction of the history (e.g. 0.5 for 50%) '
         'is replaced by a concise summary, preserving the narrative while freeing up tokens.'
     )
     parameters = {
@@ -25,9 +28,18 @@ class CompressContext(BaseTool):
                 'minimum': 0.1,
                 'maximum': 0.8
             },
+            'mode': {
+                'type': 'string',
+                'enum': ['auto', 'manual'],
+                'description': "Compression mode: 'auto' (default) generates summary via LLM; 'manual' uses your provided summary_text."
+            },
             'justification': {
                 'type': 'string',
                 'description': 'Why compression is needed now (e.g. "Context threshold reached")'
+            },
+            'summary_text': {
+                'type': 'string',
+                'description': 'Your own summary of the conversation history. Required when mode=manual.'
             }
         },
         'required': ['fraction'],
@@ -177,12 +189,24 @@ class CompressContext(BaseTool):
             
         target_messages = messages_to_compress[:num_to_summarize]
         
-        summary = kwargs.get('precomputed_summary')
+        # Determine compression mode (default 'auto' = LLM-generated summary)
+        mode = params.get('mode', 'auto')
+
+        if mode == 'manual':
+            # Manual mode: agent provides its own summary text
+            summary = params.get('summary_text', '')
+            if not summary or not str(summary).strip():
+                return "ERROR: manual mode requires a non-empty 'summary_text' parameter."
+        else:
+            # Auto mode (default): generate summary via LLM
+            precomputed = kwargs.get('precomputed_summary')
+            if precomputed:
+                summary = precomputed
+            else:
+                summary = self._generate_summary(target_messages)
+
         if not summary:
-            summary = self._generate_summary(target_messages)
-            
-        if not summary:
-            return "ERROR: LLM failed to generate a summary."
+            return "ERROR: Failed to obtain a summary."
             
         if kwargs.get('dry_run'):
             return summary
@@ -281,7 +305,7 @@ class CompressContext(BaseTool):
                     active_msgs.extend(new_active)
 
             return (
-                f"Context compressed: {int(fraction*100)}% of older history for agent '{agent_name}' "
+                f"Context compressed ({mode} mode): {int(fraction*100)}% of older history for agent '{agent_name}' "
                 f"has been summarized and removed from your context window.\n\nSummary:\n{summary}"
             )
         except Exception as e:

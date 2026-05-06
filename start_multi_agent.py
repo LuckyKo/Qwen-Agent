@@ -266,4 +266,24 @@ if __name__ == '__main__':
     print("\n[TIP] You can type messages in this terminal at ANY TIME to seamlessly inject them into the active agent's thought process without clicking Stop in the WebUI!")
     print("=" * 50)
 
+    import signal
+    import os
+
+    def handle_shutdown(signum, frame):
+        print("\n[INFO] Initiating graceful shutdown...")
+        agent_pool.stopped = True
+        if hasattr(agent_pool, 'operation_manager') and agent_pool.operation_manager:
+            try:
+                agent_pool.operation_manager.cleanup_backups()
+            except Exception:
+                pass
+        print("[INFO] Terminated.")
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, handle_shutdown)
+    if os.name != 'nt':
+        signal.signal(signal.SIGTERM, handle_shutdown)
+
+    # Note: Gradio might try to override signal handlers, but we'll try to catch it first.
+    # To be extremely aggressive against hanging, os._exit(0) is used above.
     WebUI(all_agents, chatbot_config=chatbot_config).run()

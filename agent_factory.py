@@ -120,6 +120,15 @@ User Approval System:
 - When you call a tool like write_file or edit_file, the user will see a prompt and can approve or reject.
 - If rejected, you'll receive the user's reason. Adjust your approach accordingly.
 - Read operations (read_file, list_dir, grep, view_image) are free access.
+
+Workspace & Path Reference:
+- ALL file tool paths (read_file, write_file, edit_file, list_dir, grep, etc.) are RELATIVE to the workspace root.
+  Example: to read "workspace/src/main.py", use path "src/main.py" (NOT an absolute host path).
+- shell_cmd executes commands with the workspace directory as the working directory.
+- code_interpreter runs Python inside a Docker container where the workspace is mounted at "/workspace/".
+  So a file at "src/main.py" (used by host tools) is available at "/workspace/src/main.py" inside Docker.
+  The container's working directory is /workspace, so relative paths like "src/main.py" also work.
+- NEVER use host-absolute paths (like "N:\\..." or "/home/user/...") in any tool — they will not resolve correctly.
 """
 
 

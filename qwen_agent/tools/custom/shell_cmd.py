@@ -5,7 +5,8 @@ class ShellCmd(BaseTool):
     """Execute a shell command (always requires user approval)."""
 
     name = 'shell_cmd'
-    description = 'Execute a shell command on the host system. This ALWAYS requires explicit user approval.'
+    description = ('Execute a shell command on the host system. This ALWAYS requires explicit user approval. '
+                   'Commands run with the workspace directory as the working directory.')
     parameters = {
         'type': 'object',
         'properties': {
@@ -30,6 +31,16 @@ class ShellCmd(BaseTool):
         self.agent_name = kwargs.get('agent_name')
 
     def call(self, params: str, **kwargs) -> str:
+        from qwen_agent.utils.utils import json_loads
+        import json
+
+        try:
+            if isinstance(params, str):
+                p = json_loads(params)
+                params = json.dumps(p)
+        except Exception:
+            pass
+
         params = self._verify_json_format_args(params)
         command = params['command']
         justification = params.get('justification', 'No justification provided.')

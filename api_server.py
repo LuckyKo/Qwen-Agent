@@ -455,6 +455,9 @@ def create_app(agents, agent_pool, config=None):
             # Strip non-sampling params before updating LLM config
             mcp_servers = ui_cfg.pop('mcpServers', None)
             disabled_tools = ui_cfg.pop('disabled_tools', None)
+            work_access_folders = ui_cfg.pop('work_access_folders', None)
+            if work_access_folders is not None and agent_pool and hasattr(agent_pool, 'operation_manager') and agent_pool.operation_manager:
+                agent_pool.operation_manager.set_extra_work_folders(work_access_folders)
 
             has_llm = hasattr(agent_runner, 'llm') and agent_runner.llm
             if has_llm:
@@ -465,6 +468,7 @@ def create_app(agents, agent_pool, config=None):
                 agent_runner.llm.generate_cfg.pop('max_turns', None)
                 agent_runner.llm.generate_cfg.pop('auto_continue', None)
                 agent_runner.llm.generate_cfg.pop('read_file_limit', None)
+                agent_runner.llm.generate_cfg.pop('work_access_folders', None)
                 
                 # Separate LLM params from Agent settings to avoid OpenAI API errors
                 pure_llm_cfg = copy.deepcopy(ui_cfg)
@@ -681,6 +685,24 @@ def create_app(agents, agent_pool, config=None):
         sessions.sort(key=lambda x: x['mtime'], reverse=True)
         return {"sessions": sessions}
 
+    @app.get("/api/file")
+    async def api_serve_file(path: str):
+        from fastapi.responses import FileResponse, JSONResponse
+        import os
+        
+        # Clean file:/// if present
+        if path.startswith("file:///"):
+            path = path[8:]
+        elif path.startswith("file://"):
+            path = path[7:]
+            
+        # Support for windows paths like n:/...
+        # Sometimes file:///N:/... gets parsed as N:/...
+        
+        if os.path.exists(path):
+            return FileResponse(path)
+        return JSONResponse(status_code=404, content={"message": "File not found"})
+
     # ── WebSocket ─────────────────────────────────────────────────────────
 
     @app.websocket("/ws/chat")
@@ -819,6 +841,9 @@ def create_app(agents, agent_pool, config=None):
                                 print(f"[MCP] Eagerly loaded {len(mcp_tools)} tools.")
                             except Exception as e:
                                 print(f"[MCP] Eager initialization failed: {e}")
+                        if 'work_access_folders' in ui_cfg:
+                            if agent_pool and hasattr(agent_pool, 'operation_manager') and agent_pool.operation_manager:
+                                agent_pool.operation_manager.set_extra_work_folders(ui_cfg['work_access_folders'])
                     await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'approve':

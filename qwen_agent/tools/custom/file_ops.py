@@ -12,13 +12,14 @@ class ReadFile(BaseTool):
                    'if truncation has occurred and will provide details on how to read more '
                    'of the file using the \'offset\' and \'limit\' parameters. Handles text, '
                    'images (PNG, JPG, GIF, WEBP, SVG, BMP), and PDF files. For text files, '
-                   'it can read specific line ranges.')
+                   'it can read specific line ranges.\n'
+                   'NOTE: All paths are relative to the workspace root (e.g., "src/main.py", "data/input.csv").')
     parameters = {
         'type': 'object',
         'properties': {
             'absolute_path': {
                 'type': 'string',
-                'description': "The absolute path to the file to read (e.g., '/home/user/project/file.txt')."
+                'description': "Path to the file, relative to the workspace root (e.g., 'src/main.py', 'data/input.csv')."
             },
             'offset': {
                 'type': 'integer',
@@ -218,17 +219,20 @@ class WriteFile(BaseTool):
     description = ('Writes content to a specified file in the local filesystem. '
                    'This is auto-approved for new files. To edit existing files, '
                    'use edit_file instead. Overwriting an existing file not owned '
-                   'by you requires user approval.')
+                   'by you requires user approval. '
+                   'Place the file content in <content></content> XML tags after the JSON arguments '
+                   'instead of inside the JSON string.\n'
+                   'NOTE: All paths are relative to the workspace root (e.g., "src/main.py", "output/result.txt").')
     parameters = {
         'type': 'object',
         'properties': {
             'file_path': {
                 'type': 'string',
-                'description': "The absolute path to the file to write to (e.g., '/home/user/project/file.txt')."
+                'description': "Path to the file, relative to the workspace root (e.g., 'src/main.py', 'output/result.txt')."
             },
             'content': {
                 'type': 'string',
-                'description': 'The content to write to the file. Can be raw text or a markdown code block.'
+                'description': 'The content to write to the file. Place in <content></content> XML tags.'
             },
             'justification': {
                 'type': 'string',
@@ -252,6 +256,7 @@ class WriteFile(BaseTool):
         from qwen_agent.utils.utils import extract_code, json_loads
 
         # --- Robust Fallback for Non-JSON Input ---
+        # Handles the case where the model emits "path\n```code```" instead of JSON
         if isinstance(params, str) and not params.strip().startswith('{'):
             match = re.search(r'^(?:path:?\s*)?([^\n`]+)\s*?\n*?```[^\n]*\n(.*?)\n?```', params.strip(), re.DOTALL | re.IGNORECASE)
             if match:
@@ -281,8 +286,11 @@ class WriteFile(BaseTool):
         path = params_json.get('file_path')
         content = params_json.get('content', '')
 
-        # Strip accidental markdown wrappers inside the JSON content
-        content = extract_code(content)
+        # Only strip markdown wrappers if content looks like it was JSON-embedded
+        # (i.e., starts with ``` — this is a legacy fallback for when XML extraction
+        # didn't happen and the model put a code block inside the JSON string)
+        if isinstance(content, str) and content.strip().startswith('```'):
+            content = extract_code(content)
 
         return self.agent_pool.operation_manager.write_file(
             path=path,
@@ -298,25 +306,30 @@ class EditFile(BaseTool):
     description = ('Replaces text within a file. By default, replaces a single occurrence. '
                    'Requires user approval before changes are applied for any files not '
                    'owned by the current agent. Always use the read_file tool to examine '
-                   'the file\'s current content before attempting a text replacement.')
+                   'the file\'s current content before attempting a text replacement.\n\n'
+                   'Place `old_string` and `new_string` in their respective XML tags '
+                   '(<old_string></old_string> and <new_string></new_string>) after the JSON arguments. '
+                   'Do NOT put them inside the JSON string. Include at least 3 lines of context '
+                   'BEFORE and AFTER the target text, matching whitespace and indentation precisely.\n'
+                   'NOTE: All paths are relative to the workspace root.')
     parameters = {
         'type': 'object',
         'properties': {
             'file_path': {
                 'type': 'string',
-                'description': "The absolute path to the file to modify."
+                'description': "Path to the file, relative to the workspace root (e.g., 'src/main.py')."
             },
             'old_string': {
                 'type': 'string',
-                'description': 'The EXACT literal text to replace (including all whitespace, indentation, newlines, etc.).'
+                'description': 'The EXACT literal text to replace. Place in <old_string></old_string> XML tags. Include at least 3 lines of context.'
             },
             'new_string': {
                 'type': 'string',
-                'description': 'The exact literal text to replace old_string with.'
+                'description': 'The exact literal text to replace old_string with. Place in <new_string></new_string> XML tags.'
             },
             'full_content': {
                 'type': 'string',
-                'description': 'Optional: use ONLY if you must overwrite the entire file.'
+                'description': 'Optional: use ONLY if you must overwrite the entire file. Place in <full_content></full_content> XML tags.'
             },
             'justification': {
                 'type': 'string',
@@ -369,10 +382,11 @@ class EditFile(BaseTool):
         if 'content' in params_json and not old_string:
             full_content = params_json['content']
 
-        # Robustly handle code blocks in new content
-        if new_string:
+        # Only strip markdown wrappers as a legacy fallback (when content was
+        # JSON-embedded instead of XML-extracted)
+        if new_string and isinstance(new_string, str) and new_string.strip().startswith('```'):
             new_string = extract_code(new_string)
-        if full_content:
+        if full_content and isinstance(full_content, str) and full_content.strip().startswith('```'):
             full_content = extract_code(full_content)
 
         return self.agent_pool.operation_manager.edit_file(
@@ -388,13 +402,14 @@ class ListDir(BaseTool):
     """Lists the names of files and subdirectories directly within a specified directory path."""
 
     name = 'list_dir'
-    description = 'Lists the names of files and subdirectories directly within a specified directory path.'
+    description = ('Lists the names of files and subdirectories directly within a specified directory path.\n'
+                   'NOTE: All paths are relative to the workspace root. Use "." for the workspace root itself.')
     parameters = {
         'type': 'object',
         'properties': {
             'path': {
                 'type': 'string',
-                'description': 'The absolute path to the directory to list (must be absolute, not relative)'
+                'description': "Path to the directory, relative to the workspace root (e.g., '.', 'src', 'data/images')"
             }
         },
         'required': ['path'],
@@ -417,7 +432,8 @@ class Grep(BaseTool):
     """Search for text patterns in files."""
 
     name = 'grep'
-    description = 'Search for a text pattern in files (supports regex). Like the grep command.'
+    description = ('Search for a text pattern in files (supports regex). Like the grep command.\n'
+                   'NOTE: All paths are relative to the workspace root.')
     parameters = {
         'type': 'object',
         'properties': {
@@ -427,7 +443,7 @@ class Grep(BaseTool):
             },
             'path': {
                 'type': 'string',
-                'description': 'Directory to search in (default: ".")'
+                'description': 'Directory to search in, relative to workspace root (default: ".")'
             },
             'include': {
                 'type': 'string',
@@ -457,13 +473,14 @@ class DeleteFile(BaseTool):
 
     name = 'delete_file'
     description = ('Delete a file. Requires user approval before deletion for any files not '
-                   'owned by the current agent. Deleting files you created in this session is auto-approved.')
+                   'owned by the current agent. Deleting files you created in this session is auto-approved.\n'
+                   'NOTE: All paths are relative to the workspace root.')
     parameters = {
         'type': 'object',
         'properties': {
             'path': {
                 'type': 'string',
-                'description': 'Path to the file relative to workspace directory'
+                'description': "Path to the file, relative to the workspace root (e.g., 'temp/scratch.py')"
             }
         },
         'required': ['path'],
@@ -488,17 +505,18 @@ class CopyFile(BaseTool):
 
     name = 'copy_file'
     description = ('Copy a file or directory to a new location. This is auto-approved if the destination is new. '
-                   'You become the owner of the copied file, allowing you to edit it freely without user approval.')
+                   'You become the owner of the copied file, allowing you to edit it freely without user approval.\n'
+                   'NOTE: All paths are relative to the workspace root.')
     parameters = {
         'type': 'object',
         'properties': {
             'source': {
                 'type': 'string',
-                'description': 'Path to the source file/directory relative to workspace'
+                'description': "Path to the source file/directory, relative to workspace root (e.g., 'src/old.py')"
             },
             'destination': {
                 'type': 'string',
-                'description': 'Path to the destination relative to workspace'
+                'description': "Path to the destination, relative to workspace root (e.g., 'src/new.py')"
             }
         },
         'required': ['source', 'destination'],
@@ -524,17 +542,18 @@ class MoveFile(BaseTool):
 
     name = 'move_file'
     description = ('Move a file or directory to a new location. Requires user approval for any files not owned '
-                   'by the current agent. Moving files you created in this session is auto-approved.')
+                   'by the current agent. Moving files you created in this session is auto-approved.\n'
+                   'NOTE: All paths are relative to the workspace root.')
     parameters = {
         'type': 'object',
         'properties': {
             'source': {
                 'type': 'string',
-                'description': 'Path to the source file/directory relative to workspace'
+                'description': "Path to the source file/directory, relative to workspace root"
             },
             'destination': {
                 'type': 'string',
-                'description': 'Path to the destination relative to workspace'
+                'description': "Path to the destination, relative to workspace root"
             }
         },
         'required': ['source', 'destination'],

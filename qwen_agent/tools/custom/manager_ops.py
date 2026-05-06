@@ -167,7 +167,9 @@ class DismissAgent(BaseTool):
             return f"Error: Instance '{instance_name}' not found."
 
         self.agent_pool.clear_conversation(instance_name)
-        return f"Agent instance '{instance_name}' dismissed — conversation context cleared."
+        if hasattr(self.agent_pool, 'operation_manager') and self.agent_pool.operation_manager:
+            self.agent_pool.operation_manager.cleanup_backups(instance_name)
+        return f"Agent instance '{instance_name}' dismissed — conversation context cleared and backups removed."
 
 
 @register_tool('list_agents', allow_overwrite=True)

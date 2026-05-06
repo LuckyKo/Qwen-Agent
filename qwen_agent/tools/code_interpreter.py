@@ -79,12 +79,19 @@ if threading.current_thread() is threading.main_thread():
 
 @register_tool('code_interpreter')
 class CodeInterpreter(BaseToolWithFileAccess):
-    description = 'Python code sandbox (Docker-based). It shares the project workspace, meaning you can use write_file to create multiple .py files and then import them here. To access services on the host machine (like local APIs), use "host.docker.internal" instead of "localhost".'
+    description = ('Python code sandbox (Docker-based). The workspace directory is mounted into the container. '
+                   'PATH MAPPING: Files that host tools (read_file, write_file, etc.) access as '
+                   '"foo/bar.py" are available inside this container at "/workspace/foo/bar.py". '
+                   'The container working directory is /workspace, so you can also just use '
+                   'relative paths like "foo/bar.py" in your code. '
+                   'You can use write_file to create .py files and then import them here. '
+                   'To access services on the host machine (like local APIs), use "host.docker.internal" instead of "localhost". '
+                   'Place the code in <code></code> XML tags after the JSON arguments.')
     parameters = {
         'type': 'object',
         'properties': {
             'code': {
-                'description': 'The python code to execute. Can be raw text or a markdown code block.',
+                'description': 'The python code to execute. Place in <code></code> XML tags.',
                 'type': 'string',
             }
         },
@@ -123,6 +130,11 @@ class CodeInterpreter(BaseToolWithFileAccess):
                 code = params_dict['code']
             except Exception:
                 code = extract_code(params)
+
+        # Legacy fallback: strip markdown wrappers only if code was JSON-embedded
+        # (XML-extracted code arrives clean and should not be modified)
+        if isinstance(code, str) and code.strip().startswith('```'):
+            code = extract_code(code)
 
         if not code.strip():
             return ''

@@ -66,6 +66,7 @@ class OperationManager:
         self.base_dir = Path(base_dir).resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.agent_pool = agent_pool
+        self.extra_work_folders: List[Path] = []
 
         # Currently pending approvals (request_id -> PendingApproval)
         self.pending: Dict[str, PendingApproval] = {}
@@ -78,6 +79,38 @@ class OperationManager:
         
         # User toggleable timeout
         self.enable_timeout: bool = True
+
+        import atexit
+        atexit.register(self.cleanup_backups)
+
+    def cleanup_backups(self, agent_name: Optional[str] = None):
+        """Clean up backup files for a specific agent, or all agents if None."""
+        try:
+            import shutil
+            backup_base = self.base_dir / 'logs' / 'backups'
+            if not backup_base.exists():
+                return
+            if agent_name:
+                agent_backup_dir = backup_base / agent_name
+                if agent_backup_dir.exists():
+                    shutil.rmtree(agent_backup_dir)
+            else:
+                shutil.rmtree(backup_base)
+        except Exception as e:
+            print(f"Failed to clean up backups: {e}")
+
+    def set_extra_work_folders(self, folders: List[str]):
+        """Set extra directories that the agents can access."""
+        self.extra_work_folders = []
+        for folder in folders:
+            if not folder.strip():
+                continue
+            try:
+                p = Path(folder.strip()).resolve()
+                if p.exists():
+                    self.extra_work_folders.append(p)
+            except Exception as e:
+                print(f"Failed to resolve extra work folder {folder}: {e}")
 
     # ─── Auto-Approval for Agent-Owned Files ──────────────────────────────
 
@@ -196,16 +229,24 @@ class OperationManager:
     # ─── Path Resolution ──────────────────────────────────────────────────
 
     def _resolve_path(self, path: str) -> Path:
-        """Resolve a path to be within the base directory (security)."""
+        """Resolve a path to be within the base directory or extra folders (security)."""
         try:
             resolved = (self.base_dir / path).resolve()
-            if not str(resolved).startswith(str(self.base_dir)):
-                # Handle potential case-sensitivity issues on Windows by lowercase comparison
-                if os.name == 'nt' and not str(resolved).lower().startswith(str(self.base_dir).lower()):
-                    raise ValueError(f"Path '{path}' is outside the allowed directory")
-                elif os.name != 'nt':
-                     raise ValueError(f"Path '{path}' is outside the allowed directory")
-            return resolved
+            
+            # Check if it starts with base_dir
+            if str(resolved).startswith(str(self.base_dir)):
+                return resolved
+            if os.name == 'nt' and str(resolved).lower().startswith(str(self.base_dir).lower()):
+                return resolved
+
+            # Check extra work folders
+            for extra in self.extra_work_folders:
+                if str(resolved).startswith(str(extra)):
+                    return resolved
+                if os.name == 'nt' and str(resolved).lower().startswith(str(extra).lower()):
+                    return resolved
+
+            raise ValueError(f"Path '{path}' is outside the allowed directories")
         except Exception:
             return (self.base_dir / path).resolve()
 
@@ -352,6 +393,18 @@ class OperationManager:
                 return f"REJECTED BY USER: {reason}"
 
         try:
+            backup_path_str = ""
+            if resolved.exists():
+                import time, shutil
+                backup_dir = self.base_dir / "logs" / "backups" / agent_name
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                backup_path = backup_dir / f"{resolved.name}.{int(time.time())}.bak"
+                shutil.copy2(resolved, backup_path)
+                try:
+                    backup_path_str = str(backup_path.relative_to(self.base_dir))
+                except ValueError:
+                    backup_path_str = str(backup_path)
+
             if full_content is not None:
                 resolved.parent.mkdir(parents=True, exist_ok=True)
                 resolved.write_text(full_content, encoding='utf-8')
@@ -367,7 +420,11 @@ class OperationManager:
                 resolved.write_text(new_full_content, encoding='utf-8')
 
             self.file_ownership[str(resolved)] = agent_name
-            return f"APPROVED: Edited {path}"
+            
+            res_msg = f"APPROVED: Edited {path}"
+            if backup_path_str:
+                res_msg += f" (Backup saved to: {backup_path_str})"
+            return res_msg
         except Exception as e:
             return f"ERROR: Approved but execution failed: {str(e)}"
 

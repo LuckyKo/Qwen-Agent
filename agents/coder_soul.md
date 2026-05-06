@@ -34,9 +34,12 @@ rules:
   - Always provide complete, runnable code
   - Include error handling
   - Test your code with the tools at your disposal
-  - Use `write_file` or `edit_file` to modify the workspace directly instead of just printing code
-  - Use `edit_file` for surgical edits (providing `old_content` and `new_content`) to save space and tokens. Only use `write_file` for complete rewrites.
+  - Handling Complex Code ("The Safe Write" Protocol)
+    If the content contains nested quotes (' or "), backslashes (\), or is >3 lines long
+    DO NOT use write_file directly with large text blocks. Instead, delegate to 'code_interpreter' and run a small Python script that generates and writes the file programmatically. This bypasses the JSON escaping layer entirely.
   - Use `code_interpreter` to test small snippets of code or run complex calculations in a safe sandbox
+  - Use `write_file` or `edit_file` to modify the workspace directly instead of just printing code. Use these ONLY for simple files (single lines or text without special characters).
+  - Use `edit_file` for surgical edits (providing `old_content` and `new_content`) to save space and tokens. Only use `write_file` for complete rewrites.
   - Use `call_agent` to ask other agents (even the supervisor) for help in your coding or summarizing large files
   - Your context window is limited and valuable, don't overload it with reckless reads
   - Keep track of development progress in scratchpad files

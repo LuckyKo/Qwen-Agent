@@ -209,4 +209,29 @@ if __name__ == '__main__':
     print(f"\n[TIP] Type in this terminal to inject messages into the active agent.")
     print("=" * 50)
 
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    import signal
+    import os
+
+    def handle_shutdown(signum, frame):
+        print("\n[INFO] Initiating graceful shutdown...")
+        agent_pool.stopped = True
+        if hasattr(agent_pool, 'operation_manager') and agent_pool.operation_manager:
+            try:
+                agent_pool.operation_manager.cleanup_backups()
+            except Exception:
+                pass
+        print("[INFO] Terminated.")
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, handle_shutdown)
+    if os.name != 'nt':
+        signal.signal(signal.SIGTERM, handle_shutdown)
+
+    # Note: Uvicorn overrides signal handlers. We need to tell it not to, or wrap it.
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    
+    # Overwrite uvicorn's signal handlers so ours runs
+    server.install_signal_handlers = lambda: None
+    
+    server.run()

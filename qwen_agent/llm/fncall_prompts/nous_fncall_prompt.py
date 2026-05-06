@@ -15,7 +15,8 @@
 import copy
 import json
 import os
-from typing import List, Literal, Union
+import re
+from typing import Dict, List, Literal, Union
 
 import json5
 
@@ -23,6 +24,77 @@ from qwen_agent.llm.fncall_prompts.base_fncall_prompt import BaseFnCallPrompt
 from qwen_agent.llm.schema import ASSISTANT, FUNCTION, SYSTEM, USER, ContentItem, FunctionCall, Message
 from qwen_agent.log import logger
 from qwen_agent.utils.utils import json_loads, repair_invalid_json
+
+# Fields that should be placed in XML tags instead of inside JSON strings.
+# These are the fields that typically contain code or large multi-line text
+# that would require fragile JSON escaping.
+XML_CONTENT_FIELDS = {'content', 'old_string', 'new_string', 'full_content', 'code', 'command'}
+
+# Minimum length for a field value to be emitted as XML instead of JSON.
+# Short values (paths, flags) stay in JSON for readability.
+XML_MIN_LENGTH = 40
+
+
+def _extract_xml_content_fields(text: str) -> Dict[str, str]:
+    """Extract XML-delimited content fields from tool call text.
+
+    Handles: <content>...</content>, <old_string>...</old_string>,
+             <new_string>...</new_string>, <code>...</code>,
+             <command>...</command>, <full_content>...</full_content>
+
+    Returns a dict of field_name -> raw_content.
+    """
+    fields = {}
+    for tag in XML_CONTENT_FIELDS:
+        # Use a non-greedy match to handle multiple fields in the same text.
+        # re.DOTALL ensures . matches newlines.
+        pattern = f'<{tag}>(.*?)</{tag}>'
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            val = match.group(1)
+            # Strip exactly one leading/trailing newline — the model
+            # naturally puts \n after <tag> and before </tag>.
+            if val.startswith('\n'):
+                val = val[1:]
+            if val.endswith('\n'):
+                val = val[:-1]
+            fields[tag] = val
+    return fields
+
+
+def _strip_xml_content_fields(text: str) -> str:
+    """Remove XML content field tags and their content from text,
+    leaving only the JSON portion."""
+    for tag in XML_CONTENT_FIELDS:
+        text = re.sub(f'<{tag}>.*?</{tag}>', '', text, flags=re.DOTALL)
+    return text.strip()
+
+
+def _build_xml_tool_call(fn_name: str, arguments: dict) -> str:
+    """Build a <tool_call> string, placing large content fields in XML tags
+    outside the JSON to avoid escaping issues."""
+    xml_parts = []
+    json_args = {}
+
+    if isinstance(arguments, dict):
+        for k, v in arguments.items():
+            if (k in XML_CONTENT_FIELDS
+                    and isinstance(v, str)
+                    and len(v) >= XML_MIN_LENGTH):
+                xml_parts.append(f'<{k}>\n{v}\n</{k}>')
+            else:
+                json_args[k] = v
+    else:
+        # Fallback: arguments is already a string or something unexpected
+        json_args = arguments
+
+    fc = {'name': fn_name, 'arguments': json_args}
+    fc_json = json.dumps(fc, ensure_ascii=False)
+    if xml_parts:
+        inner = fc_json + '\n' + '\n'.join(xml_parts)
+    else:
+        inner = fc_json
+    return f'<tool_call>\n{inner}\n</tool_call>'
 
 
 class NousFnCallPrompt(BaseFnCallPrompt):
@@ -55,48 +127,28 @@ class NousFnCallPrompt(BaseFnCallPrompt):
             elif role == ASSISTANT:
                 fn_call = msg.function_call
                 if fn_call:
-                    if (not SPECIAL_CODE_MODE) or (CODE_TOOL_PATTERN not in fn_call.name):
-                        arguments = fn_call.arguments
-                        try:
-                            if isinstance(arguments, str) and arguments.strip():
-                                if arguments.strip().startswith('```'):
-                                    import re
-                                    arguments = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', arguments.strip())
-                                    arguments = re.sub(r'\n?\s*```$', '', arguments)
-                                if arguments.strip():
-                                    try:
-                                        arguments = json_loads(arguments)
-                                    except Exception:
-                                        # Should already be handled by json_loads's repair
-                                        arguments = arguments 
-                        except Exception:
-                            logger.debug(f'Invalid json tool-calling arguments in history: {arguments}')
-                        fc = {'name': fn_call.name, 'arguments': arguments}
-                        fc = json.dumps(fc, ensure_ascii=False)
-                        fc = f'<tool_call>\n{fc}\n</tool_call>'
+                    # Parse arguments from string to dict if needed
+                    arguments = fn_call.arguments
+                    try:
+                        if isinstance(arguments, str) and arguments.strip():
+                            if arguments.strip().startswith('```'):
+                                arguments = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', arguments.strip())
+                                arguments = re.sub(r'\n?\s*```$', '', arguments)
+                            if arguments.strip():
+                                try:
+                                    arguments = json_loads(arguments)
+                                except Exception:
+                                    arguments = arguments
+                    except Exception:
+                        logger.debug(f'Invalid json tool-calling arguments in history: {arguments}')
+
+                    # Build the tool call text with XML-delimited content fields
+                    if isinstance(arguments, dict):
+                        fc = _build_xml_tool_call(fn_call.name, arguments)
                     else:
-                        arguments = fn_call.arguments
-                        try:
-                            if isinstance(arguments, str) and arguments.strip():
-                                if arguments.strip().startswith('```'):
-                                    import re
-                                    arguments = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', arguments.strip())
-                                    arguments = re.sub(r'\n?\s*```$', '', arguments)
-                                if arguments.strip():
-                                    para = json5.loads(arguments)
-                                else:
-                                    para = {'code': ''}
-                            else:
-                                para = arguments
-                            code = para['code']
-                            para['code'] = ''
-                        except Exception:
-                            logger.debug(f'Invalid code tool arguments in history: {arguments}')
-                            para = {'code': ''}
-                            code = str(arguments)
-                        fc = {'name': fn_call.name, 'arguments': para}
-                        fc = json.dumps(fc, ensure_ascii=False)
-                        fc = f'<tool_call>\n{fc}\n<code>\n{code}\n</code>\n</tool_call>'
+                        # Fallback: can't parse, emit as-is
+                        fc_obj = {'name': fn_call.name, 'arguments': arguments}
+                        fc = f'<tool_call>\n{json.dumps(fc_obj, ensure_ascii=False)}\n</tool_call>'
 
                     content.append(ContentItem(text=fc))
                 if messages and messages[-1].role == ASSISTANT:
@@ -232,49 +284,74 @@ class NousFnCallPrompt(BaseFnCallPrompt):
                         ))  # split thought and function call
                         new_content = []
                     fn = None
-                    if SPECIAL_CODE_MODE and '<code>' in one_tool_call_txt[0] and '</code>' in one_tool_call_txt[0]:
-                        _snips = one_tool_call_txt[0].split('<code>')
+                    raw_tool_text = one_tool_call_txt[0]
+
+                    # --- Phase 2: Extract XML content fields first ---
+                    xml_fields = _extract_xml_content_fields(raw_tool_text)
+                    # Strip XML fields to leave only the JSON portion
+                    json_portion = _strip_xml_content_fields(raw_tool_text).strip()
+
+                    # Legacy SPECIAL_CODE_MODE: handle <code> inside tool calls
+                    if SPECIAL_CODE_MODE and '<code>' in raw_tool_text and '</code>' in raw_tool_text:
+                        _snips = raw_tool_text.split('<code>')
                         for i, _s in enumerate(_snips):
                             if i == 0:
                                 try:
                                     content_to_parse = _s.strip()
                                     if content_to_parse.startswith('```'):
-                                        import re
                                         content_to_parse = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', content_to_parse)
                                         content_to_parse = re.sub(r'\n?\s*```$', '', content_to_parse)
                                     fn = json5.loads(content_to_parse)
                                 except Exception:
                                     fn = {'name': 'code_interpreter', 'arguments': {}}
                             else:
-                                # TODO: support more flexible params
                                 code = _s.replace('</code>', '')
                                 if fn and 'arguments' in fn:
                                     fn['arguments']['code'] = code
                     else:
+                        # Try parsing the JSON portion (with XML fields stripped)
                         try:
-                            content_to_parse = one_tool_call_txt[0].strip()
-                            if content_to_parse.startswith('```'):
-                                import re
-                                content_to_parse = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', content_to_parse)
-                                content_to_parse = re.sub(r'\n?\s*```$', '', content_to_parse)
-                            
-                            fn = json_loads(content_to_parse)
+                            if json_portion.startswith('```'):
+                                json_portion = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', json_portion)
+                                json_portion = re.sub(r'\n?\s*```$', '', json_portion)
+                            fn = json_loads(json_portion)
                         except Exception:
-                            logger.warning(f'Invalid json tool-calling arguments in response: {one_tool_call_txt[0].strip()}')
-                            fn_name, fn_args = extract_fn(one_tool_call_txt[0].strip())
-                            _extra = copy.deepcopy(extra) if extra else {'function_id': ''}
-                            _extra['function_id'] = str(tool_id)
-                            tool_id += 1
-                            new_messages.append(
-                                Message(
-                                    role=ASSISTANT,
-                                    content=[],
-                                    function_call=FunctionCall(
-                                        name=fn_name,
-                                        arguments=fn_args,
-                                    ),
-                                    extra=_extra,
-                                ))
+                            # If JSON parsing failed but we got XML fields,
+                            # try to salvage by extracting just the function name
+                            if xml_fields:
+                                fn_name_match = re.search(r'"name"\s*:\s*"([^"]+)"', raw_tool_text)
+                                if fn_name_match:
+                                    fn = {'name': fn_name_match.group(1), 'arguments': {}}
+                                else:
+                                    logger.warning(f'Got XML fields but cannot determine tool name: {raw_tool_text[:200]}')
+                            else:
+                                logger.warning(f'Invalid json tool-calling arguments in response: {raw_tool_text[:200]}')
+                                fn_name, fn_args = extract_fn(raw_tool_text.strip())
+                                _extra = copy.deepcopy(extra) if extra else {'function_id': ''}
+                                _extra['function_id'] = str(tool_id)
+                                tool_id += 1
+                                new_messages.append(
+                                    Message(
+                                        role=ASSISTANT,
+                                        content=[],
+                                        function_call=FunctionCall(
+                                            name=fn_name,
+                                            arguments=fn_args,
+                                        ),
+                                        extra=_extra,
+                                    ))
+
+                    # --- Merge XML fields into parsed arguments ---
+                    if fn and xml_fields:
+                        if 'arguments' not in fn:
+                            fn['arguments'] = {}
+                        if isinstance(fn['arguments'], str):
+                            try:
+                                fn['arguments'] = json_loads(fn['arguments'])
+                            except Exception:
+                                fn['arguments'] = {}
+                        fn['arguments'].update(xml_fields)
+
                     if fn and 'name' in fn and 'arguments' in fn:
                         _extra = copy.deepcopy(extra) if extra else {}
                         _extra['function_id'] = str(tool_id)
@@ -289,9 +366,6 @@ class NousFnCallPrompt(BaseFnCallPrompt):
                                 ),
                                 extra=_extra,
                             ))
-                    # Expected not to output extra tails
-                    # if one_tool_call_txt[1].strip():
-                    #     new_content.append(ContentItem(text=one_tool_call_txt[1]))
 
             if new_content:
                 new_messages.append(Message(role=role, content=new_content, extra=extra))
@@ -311,6 +385,35 @@ For each function call, return a json object with function name and arguments wi
 
 <tool_call>
 {{"name": <function-name>, "arguments": <args-json-object>}}
+</tool_call>
+
+**CRITICAL for tools with large text arguments** (write_file, edit_file, code_interpreter):
+Place large text values (code, file content, etc.) in XML tags AFTER the JSON object, NOT inside the JSON string.
+This avoids JSON escaping issues with quotes, newlines, and backslashes in code.
+
+Example for write_file — note how content is OUTSIDE the JSON:
+<tool_call>
+{{"name": "write_file", "arguments": {{"file_path": "/path/to/file.py"}}}}
+<content>
+def hello():
+    print("Hello, world!")
+</content>
+</tool_call>
+
+Example for edit_file:
+<tool_call>
+{{"name": "edit_file", "arguments": {{"file_path": "/path/to/file.py"}}}}
+<old_string>
+    print("old")
+</old_string>
+<new_string>
+    print("new")
+</new_string>
+</tool_call>
+
+For simple tools with short arguments, use normal JSON:
+<tool_call>
+{{"name": "list_dir", "arguments": {{"path": "/home/user/project"}}}}
 </tool_call>"""
 
 SPECIAL_CODE_MODE = os.getenv('SPECIAL_CODE_MODE', 'false').lower() == 'true'
@@ -328,12 +431,37 @@ For each function call, return a json object with function name and arguments wi
 <tool_call>
 {{"name": <function-name>, "arguments": <args-json-object>}}
 </tool_call>
-For code parameters, use placeholders first, and then put the code within <code></code> XML tags, such as:
+
+**CRITICAL for tools with large text arguments** (write_file, edit_file, code_interpreter):
+Place large text values (code, file content, etc.) in XML tags AFTER the JSON object, NOT inside the JSON string.
+This avoids JSON escaping issues with quotes, newlines, and backslashes in code.
+
+For code_interpreter, put the code in <code></code> tags:
 <tool_call>
-{{"name": <function-name>, "arguments": {{"code": ""}}}}
+{{"name": "code_interpreter", "arguments": {{}}}}
 <code>
-Here is the code.
+print("Hello, world!")
 </code>
+</tool_call>
+
+For write_file:
+<tool_call>
+{{"name": "write_file", "arguments": {{"file_path": "/path/to/file.py"}}}}
+<content>
+def hello():
+    print("Hello, world!")
+</content>
+</tool_call>
+
+For edit_file:
+<tool_call>
+{{"name": "edit_file", "arguments": {{"file_path": "/path/to/file.py"}}}}
+<old_string>
+    print("old")
+</old_string>
+<new_string>
+    print("new")
+</new_string>
 </tool_call>"""
 
 

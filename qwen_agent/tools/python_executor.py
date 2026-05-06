@@ -165,11 +165,13 @@ class PythonExecutor(BaseTool):
         use_timeout = hasattr(signal, 'SIGALRM')
         old_cwd = os.getcwd()
         
+        result = ''
+        report = 'Done'
         try:
             if work_dir:
                 os.makedirs(work_dir, exist_ok=True)
                 os.chdir(work_dir)
-            
+
             if get_answer_from_stdout:
                 program_io = io.StringIO()
                 with redirect_stdout(program_io):
@@ -199,9 +201,9 @@ class PythonExecutor(BaseTool):
                 else:
                     runtime.exec_code('\n'.join(code[:-1]))
                     result = runtime.eval_code(code[-1])
-            report = 'Done'
             str(result)
             pickle.dumps(result)  # serialization check
+        except Exception:
             report = traceback.format_exc().split('\n')[-2]
         finally:
             os.chdir(old_cwd)
@@ -250,7 +252,7 @@ class PythonExecutor(BaseTool):
                     timeout_cnt += 1
                 except Exception as error:
                     print(error)
-                    exit()
+                    all_exec_results.append(('', str(error)))
                 if progress_bar is not None:
                     progress_bar.update(1)
 

@@ -298,6 +298,8 @@ function saveSettings() {
   if (settingMaxImageSize) s['setting-max-image-size'] = settingMaxImageSize.value;
   if (settingMcpServers) s['setting-mcp-servers'] = settingMcpServers.value;
   
+  if ($('#workAccessFolders')) s['work-access-folders'] = $('#workAccessFolders').value;
+  
   ranges.forEach(r => {
     if (r.input) s[r.input.id] = r.input.value;
   });
@@ -385,6 +387,10 @@ function loadSettings() {
 
     if (settingMcpServers && s['setting-mcp-servers'] !== undefined) {
       settingMcpServers.value = s['setting-mcp-servers'];
+    }
+    
+    if ($('#workAccessFolders') && s['work-access-folders'] !== undefined) {
+      $('#workAccessFolders').value = s['work-access-folders'];
     }
   } catch (e) {
     console.error('Failed to load settings', e);
@@ -856,10 +862,18 @@ function renderToolResult(msg) {
   const content = msg.content || '';
   const shouldTruncate = settingTruncateTools ? settingTruncateTools.checked : true;
   const truncated = (shouldTruncate && content.length > 2000) ? content.substring(0, 2000) + '\n\n... (truncated)' : content;
+  
+  let contentHtml = `<pre><code>${escapeHtml(truncated)}</code></pre>`;
+  if (msg.name === 'view_image' || content.match(/!\[.*?\]\(.*?\)/)) {
+    // Rewrite file:/// URLs to use our backend proxy to avoid browser security restrictions
+    const proxiedContent = truncated.replace(/!\[(.*?)\]\((?:file:\/\/\/|file:\/\/)(.*?)\)/g, '![image](/api/file?path=$2)');
+    contentHtml = `<div class="tool-image-wrapper" style="padding-top: 8px;">${renderMarkdown(proxiedContent)}</div>`;
+  }
+
   return `
     <details class="tool-result">
       <summary>📋 Result from <strong>${escapeHtml(msg.name || 'tool')}</strong>${shouldTruncate && content.length > 2000 ? ` <span class="truncation-hint">(${content.length.toLocaleString()} chars)</span>` : ''}</summary>
-      <pre><code>${escapeHtml(truncated)}</code></pre>
+      ${contentHtml}
     </details>
   `;
 }
@@ -1898,6 +1912,10 @@ function getGenerateCfg() {
     } catch(e) {
       console.warn('Invalid MCP Servers JSON:', e);
     }
+  }
+
+  if ($('#workAccessFolders') && $('#workAccessFolders').value.trim()) {
+    cfg.work_access_folders = $('#workAccessFolders').value.trim().split('\n').map(s => s.trim()).filter(s => s);
   }
 
   if (typeof agentDisabledTools !== 'undefined') {
