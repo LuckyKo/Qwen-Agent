@@ -29,6 +29,32 @@ limitations under the License.
 </p>
 
 
+## This Fork
+
+This fork adds a production-oriented multi-agent framework, a custom web UI, and several robustness improvements over the upstream `QwenLM/Qwen-Agent` main branch. **899 insertions across 24 files.**
+
+### Multi-Agent Framework
+- **OrchestratorAgent** (`agent_orchestrator.py`) — Supervisor agent that intercepts `call_agent` / `dismiss_agent` tool calls and handles them as streaming generators, delegating tasks to named sub-agent instances with their own conversation history.
+- **AgentPool** (`agent_pool.py`) — Agent lifecycle management, per-instance conversation persistence (JSONL), context compression (auto + manual mode), and streaming state for the WebUI.
+- **OperationManager** (`operation_manager.py`) — Blocking user-facing approval system for all mutating operations (file write/edit/delete/copy/move, code execution). Each `edit_file` creates a timestamped `.bak` backup in `logs/backups/<agent>/`. Graceful shutdown and agent dismissal clean up backups automatically.
+
+### Web UI & API
+- **Custom web UI** (`web_ui/`) — Replaces Gradio entirely with a lightweight HTML/CSS/JS frontend. Supports session management, approval buttons, tool result display, image rendering via backend proxy (rewrites `file:///` URLs), and a "Work Access Folders" setting to whitelist directories outside the base workspace.
+- **WebSocket + REST API server** (`api_server.py`) — Alternative headless interface for any external frontend (browser, Electron, CLI) to connect, send messages, manage sessions, and handle approvals in real time.
+
+### Tool Call & Path System
+- **XML-based tool call format** — Large text arguments (file content, code blocks, `old_string`/`new_string`) are placed in XML tags *outside* the JSON payload, eliminating quote/backslash escaping issues that cause silent corruption.
+- **Workspace-relative paths** — All file-tool paths are strictly relative to the workspace root; agent system prompts document the Docker `/workspace/` mount mapping so agents never emit host-absolute paths like `N:\...`.
+- **Extra work access folders** — New UI setting lets users whitelist additional directories outside the base workspace; path-resolver security check respects them.
+
+### Other Improvements
+- **Graceful shutdown** — SIGINT / SIGTERM handlers set `agent_pool.stopped`, run `cleanup_backups()`, and force-exit to prevent hanging.
+- **CompressContext manual mode** — Agents can supply their own summary text directly, skipping LLM generation to save tokens when they already have a good summary.
+- **Image rendering in tool results** — Markdown images (including `file:///` URLs) are rendered via the backend `/api/file` proxy instead of raw `<pre>` blocks that browsers block.
+- **PythonExecutor bug fix** — Proper exception handling and batch crash recovery (single failure no longer kills the whole process).
+
+---
+
 Qwen-Agent is a framework for developing LLM applications based on the instruction following, tool usage, planning, and
 memory capabilities of Qwen.
 It also comes with example applications such as Browser Assistant, Code Interpreter, and Custom Assistant.
