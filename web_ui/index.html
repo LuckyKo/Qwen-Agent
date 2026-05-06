@@ -141,6 +141,10 @@
                 </button>
               </div>
               <div class="input-controls">
+                <label class="setting-field toggle-field" style="margin: 0; padding: 0 8px; font-size: 12px; cursor: pointer;" title="Send automatic replies when agent stops">
+                  <span>AFK</span>
+                  <input type="checkbox" id="afkToggle" />
+                </label>
                 <button id="continueBtn" class="btn btn-secondary" title="Continue generation (Ctrl+Shift+Enter)">⏩ Continue</button>
                 <button id="retryBtn" class="btn btn-secondary" title="Retry last turn (Ctrl+Shift+R)">🔄 Retry</button>
                 <button id="stopBtn" class="btn btn-stop" style="display:none;">⏹ Stop</button>
@@ -326,6 +330,10 @@
               <div class="settings-section">
                 <h3 class="settings-section-title">Multi-Agent Control</h3>
                 <div class="settings-section-body">
+                  <label class="setting-field" style="flex-direction: column; align-items: stretch; gap: 4px;">
+                    <span>AFK Auto-Reply Message</span>
+                    <textarea id="setting-afk-message" rows="3" style="width: 100%; font-family: inherit; padding: 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical;">User is AFK, continue working on given task or polish/verify your work if there are things to improve...</textarea>
+                  </label>
                   <label class="setting-field">
                     <span>Max Turns per Run</span>
                     <input type="number" id="setting-max-turns" min="1" max="500" value="50" />

@@ -42,6 +42,9 @@ const state = {
     tokenCount: 0,
     lastContentLength: 0,
     active: false,
+    // Throttle timestamps for streaming performance
+    lastGenStatsUpdate: 0,       // For updateGenStats throttling (~2Hz)
+    lastSubAgentRender: 0,      // For renderSubAgents throttling (~750ms)
   },
   totalTokens: 0,
   totalWords: 0,
@@ -50,7 +53,7 @@ const state = {
 
 let ws = null;
 let reconnectTimer = null;
-let lastRenderedCount = -1;
+let lastRenderedCount = Infinity;
 let lastLastContent = null;
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
@@ -103,6 +106,9 @@ const imageInput = $('#imageInput');
 
 const settingMcpServers = $('#setting-mcp-servers');
 
+const afkToggle = $('#afkToggle');
+const settingAfkMessage = $('#setting-afk-message');
+
 // Range outputs
 const ranges = [
   { input: $('#setting-temperature'), output: $('#val-temperature') },
@@ -139,9 +145,9 @@ if (btnToggleSidebar && appSidebar) {
 // Collapsible sub-sections
 document.querySelectorAll('.sidebar-label, .settings-section-title').forEach(el => {
   el.addEventListener('click', (e) => {
-    const section = e.target.closest('.sidebar-section') || 
-                    e.target.closest('.sessions-section') || 
-                    e.target.closest('.settings-section');
+    const section = e.target.closest('.sidebar-section') ||
+      e.target.closest('.sessions-section') ||
+      e.target.closest('.settings-section');
     if (section) {
       section.classList.toggle('collapsed');
     }
@@ -178,8 +184,8 @@ fetchSessions();
 function renderSessions() {
   if (!sessionsList) return;
   const query = sessionSearch ? sessionSearch.value.toLowerCase() : '';
-  const filtered = sessions.filter(s => 
-    s.name.toLowerCase().includes(query) || 
+  const filtered = sessions.filter(s =>
+    s.name.toLowerCase().includes(query) ||
     s.agent.toLowerCase().includes(query)
   );
 
@@ -312,9 +318,9 @@ function saveSettings() {
   if (settingImageDetail) s['setting-image-detail'] = settingImageDetail.value;
   if (settingMaxImageSize) s['setting-max-image-size'] = settingMaxImageSize.value;
   if (settingMcpServers) s['setting-mcp-servers'] = settingMcpServers.value;
-  
+
   if ($('#workAccessFolders')) s['work-access-folders'] = $('#workAccessFolders').value;
-  
+
   ranges.forEach(r => {
     if (r.input) s[r.input.id] = r.input.value;
   });
@@ -323,6 +329,8 @@ function saveSettings() {
   if ($('#setting-auto-continue')) s['auto-continue'] = $('#setting-auto-continue').checked;
   if ($('#setting-read-file-limit')) s['read-file-limit'] = $('#setting-read-file-limit').value;
   if (settingVisionEnabled) s['vision-enabled'] = settingVisionEnabled.checked;
+  if (afkToggle) s['afk-enabled'] = afkToggle.checked;
+  if (settingAfkMessage) s['afk-message'] = settingAfkMessage.value;
 
   localStorage.setItem('qwen-settings', JSON.stringify(s));
 }
@@ -384,7 +392,7 @@ function loadSettings() {
       settingRawEditColor.value = s['setting-raw-edit-color'];
       settingRawEditColor.dispatchEvent(new Event('input'));
     }
-    
+
     if (s['vision-enabled'] !== undefined) $('#setting-vision-enabled').checked = s['vision-enabled'];
     if (s['max-turns'] !== undefined) $('#setting-max-turns').value = s['max-turns'];
     if (s['auto-continue'] !== undefined) $('#setting-auto-continue').checked = s['auto-continue'];
@@ -403,20 +411,47 @@ function loadSettings() {
     if (settingMcpServers && s['setting-mcp-servers'] !== undefined) {
       settingMcpServers.value = s['setting-mcp-servers'];
     }
-    
+
     if ($('#workAccessFolders') && s['work-access-folders'] !== undefined) {
       $('#workAccessFolders').value = s['work-access-folders'];
+    }
+
+    if (afkToggle && s['afk-enabled'] !== undefined) {
+      afkToggle.checked = s['afk-enabled'];
+    }
+    if (settingAfkMessage && s['afk-message'] !== undefined) {
+      settingAfkMessage.value = s['afk-message'];
     }
   } catch (e) {
     console.error('Failed to load settings', e);
   }
 }
 
-// Auto-save settings on any change in the panel
+// Auto-save settings on any change in the panel (debounced for sliders/typing)
+let _saveSettingsTimer;
+function debouncedSaveSettings() {
+  clearTimeout(_saveSettingsTimer);
+  _saveSettingsTimer = setTimeout(saveSettings, 300);
+}
+
 if (sidePanel) {
   sidePanel.addEventListener('change', saveSettings);
-  // Optional: save on input for color pickers to save while dragging
-  sidePanel.addEventListener('input', saveSettings);
+  sidePanel.addEventListener('input', debouncedSaveSettings);
+}
+
+if (afkToggle) {
+  afkToggle.addEventListener('change', () => {
+    saveSettings();
+    if (afkToggle.checked && !state.generating) {
+      checkAfkAutoReply();
+    } else if (!afkToggle.checked) {
+      if (afkPendingTimer) clearTimeout(afkPendingTimer);
+    }
+  });
+}
+
+if (settingAfkMessage) {
+  settingAfkMessage.addEventListener('input', debouncedSaveSettings);
 }
 
 loadSettings();
@@ -488,17 +523,17 @@ function playSound(type) {
       if (!AudioContext) return;
       audioCtx = new AudioContext();
     }
-    
+
     if (audioCtx.state === 'suspended') {
       audioCtx.resume();
     }
-    
+
     const oscillator = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
-    
+
     oscillator.connect(gainNode);
     gainNode.connect(audioCtx.destination);
-    
+
     if (type === 'intervention' && settingSoundIntervention && settingSoundIntervention.checked) {
       // Alert sound: two short high pitched beeps
       oscillator.type = 'square';
@@ -547,7 +582,7 @@ function handleServerMessage(data) {
         state.approvals = data.approvals;
         renderApprovals();
       }
-      
+
       if (data.total_tokens !== undefined) state.totalTokens = data.total_tokens;
       if (data.total_words !== undefined) state.totalWords = data.total_words;
       if (data.max_tokens !== undefined) state.maxTokens = data.max_tokens;
@@ -556,6 +591,9 @@ function handleServerMessage(data) {
         statusModel.textContent = data.current_model;
       }
 
+      // Full state: force complete re-render (session load, reset, edit, delete, etc.)
+      lastRenderedCount = Infinity;
+      lastLastContent = null;
       renderMessages();
       renderSubAgents();
       updateControls();
@@ -570,6 +608,61 @@ function handleServerMessage(data) {
       }
       break;
 
+    case 'stream_update': {
+      // Lightweight streaming delta — only response messages + sub-agents
+      const historyCount = data.history_count || 0;
+      const responseMsgs = data.response_messages || [];
+
+      // Merge: keep stable history, replace streaming response tail
+      if (historyCount <= state.messages.length) {
+        state.messages.length = historyCount;
+      }
+      state.messages.push(...responseMsgs);
+
+      if (data.sub_agents) state.subAgents = data.sub_agents;
+      if (data.active_stack) state.activeStack = data.active_stack;
+      state.generating = true;
+
+      // Update scalar stats (always lightweight — no DOM work)
+      if (data.total_tokens !== undefined) state.totalTokens = data.total_tokens;
+      if (data.total_words !== undefined) state.totalWords = data.total_words;
+      if (data.max_tokens !== undefined) state.maxTokens = data.max_tokens;
+      if (data.current_model && statusModel) statusModel.textContent = data.current_model;
+
+      // Approvals require immediate rendering (user must see these promptly)
+      if (data.approvals) {
+        state.approvals = data.approvals;
+        renderApprovals();
+      }
+
+      // Always update message display — already incremental-optimized inside renderMessages()
+      renderMessages();
+
+      // Update UI controls (stop button, send disabled state, etc.)
+      updateControls();
+
+      // Throttle sub-agent rendering to ~750ms to match server refresh rate.
+      // The server only updates sub_agents every ~5 ticks (~750ms), so rendering
+      // more frequently is wasted work. Active flags (state.activeStack) are still
+      // updated on every tick above, keeping the activity feed responsive.
+      const now = performance.now();
+      if (!state.genStats.lastSubAgentRender) state.genStats.lastSubAgentRender = 0;
+      if (now - state.genStats.lastSubAgentRender > 750) {
+        renderSubAgents();
+        state.genStats.lastSubAgentRender = now;
+      }
+
+      // Throttle gen stats to ~2Hz instead of ~6.5Hz. The token/sec display is
+      // approximate anyway, so updating twice per second is visually indistinguishable
+      // from the original frequency.
+      if (!state.genStats.lastGenStatsUpdate) state.genStats.lastGenStatsUpdate = 0;
+      if (now - state.genStats.lastGenStatsUpdate > 500) {
+        updateGenStats(state.messages);
+        state.genStats.lastGenStatsUpdate = now;
+      }
+    }
+    break;
+
     case 'approvals':
       state.approvals = data.approvals || [];
       renderApprovals();
@@ -581,14 +674,53 @@ function handleServerMessage(data) {
       updateControls();
       break;
   }
-  
+
   // Trigger sounds based on state changes
   const newApprovalsCount = (state.approvals || []).length;
   if (newApprovalsCount > prevApprovalsCount) {
     playSound('intervention');
   } else if (wasGenerating && !state.generating) {
     playSound('completed');
+    checkAfkAutoReply();
   }
+}
+
+// ── AFK Logic ────────────────────────────────────────────────────────────────
+
+let lastAfkTime = 0;
+let afkPendingTimer = null;
+
+function checkAfkAutoReply() {
+  if (afkToggle && afkToggle.checked) {
+    const now = Date.now();
+    const timeSinceLastAfk = now - lastAfkTime;
+    const cooldown = 5 * 60 * 1000; // 5 minutes
+    
+    if (timeSinceLastAfk >= cooldown || lastAfkTime === 0) {
+      // Send immediately (after a small delay to ensure UI updates)
+      setTimeout(() => {
+        if (!state.generating && afkToggle.checked) triggerAfkSend();
+      }, 1000);
+    } else {
+      // Wait for the remaining time
+      const remaining = cooldown - timeSinceLastAfk;
+      if (afkPendingTimer) clearTimeout(afkPendingTimer);
+      afkPendingTimer = setTimeout(() => {
+        if (!state.generating && afkToggle.checked) {
+          triggerAfkSend();
+        }
+      }, remaining);
+    }
+  }
+}
+
+function triggerAfkSend() {
+  lastAfkTime = Date.now();
+  const msg = (settingAfkMessage && settingAfkMessage.value.trim()) ? settingAfkMessage.value.trim() : 'User is AFK, continue working on given task or polish/verify your work if there are things to improve...';
+  if (state.generating) return;
+  
+  chatInput.value = msg;
+  sendMessage();
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
@@ -596,7 +728,7 @@ function handleServerMessage(data) {
 function renderMessages() {
   const msgs = state.messages;
   const container = messagesEl;
-  
+
   updateContextBar(document.getElementById('chatContextFill'), msgs, state.totalTokens, state.maxTokens);
 
   // Word count and token estimation from Backend
@@ -613,7 +745,7 @@ function renderMessages() {
   const lastContent = lastMsg ? (lastMsg.content || '') + (lastMsg.function_call ? JSON.stringify(lastMsg.function_call) : '') + (lastMsg.reasoning_content || '') : '';
 
   // Full re-render if count changed significantly or decreased
-  if (currentCount < lastRenderedCount || currentCount === 0 || Math.abs(currentCount - lastRenderedCount) > 1) {
+  if (currentCount < lastRenderedCount || currentCount === 0) {
     fullRender(msgs, container);
     lastRenderedCount = currentCount;
     lastLastContent = lastContent;
@@ -659,12 +791,11 @@ function updateMainActivityBar() {
   if (state.generating) {
     bar.classList.add('active');
     if (chatTab) chatTab.classList.add('agent-active');
-    
+
     const msgs = state.messages || [];
     const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
     if (lastMsg) {
-      const fullText = (lastMsg.reasoning_content || '') + (lastMsg.content || '') + (lastMsg.function_call ? JSON.stringify(lastMsg.function_call) : '');
-      activityText.textContent = getLastWords(fullText, 10) || 'Streaming...';
+      activityText.textContent = getActivityPreview(lastMsg);
     } else {
       activityText.textContent = 'Agent Starting...';
     }
@@ -836,9 +967,9 @@ function updateBubbleContent(bubble, msg) {
 function setInnerHtmlWithState(el, html) {
   const details = el.querySelectorAll('details');
   const states = Array.from(details).map(d => d.open);
-  
+
   el.innerHTML = html;
-  
+
   const newDetails = el.querySelectorAll('details');
   newDetails.forEach((d, i) => {
     if (i < states.length) {
@@ -877,7 +1008,7 @@ function renderToolResult(msg) {
   const content = msg.content || '';
   const shouldTruncate = settingTruncateTools ? settingTruncateTools.checked : true;
   const truncated = (shouldTruncate && content.length > 2000) ? content.substring(0, 2000) + '\n\n... (truncated)' : content;
-  
+
   let contentHtml = `<pre><code>${escapeHtml(truncated)}</code></pre>`;
   if (msg.name === 'view_image' || content.match(/!\[.*?\]\(.*?\)/)) {
     // Rewrite file:/// URLs to use our backend proxy to avoid browser security restrictions
@@ -1105,6 +1236,22 @@ function renderApprovals() {
     return;
   }
 
+  // Auto-reject if AFK is enabled
+  if (afkToggle && afkToggle.checked) {
+    const reason = (settingAfkMessage && settingAfkMessage.value.trim()) 
+      ? `Auto-rejected (AFK): ${settingAfkMessage.value.trim()}`
+      : 'Auto-rejected (AFK mode active)';
+    
+    const pending = [...state.approvals];
+    state.approvals = [];
+    bar.style.display = 'none';
+    
+    pending.forEach(ap => {
+      send({ type: 'reject', request_id: ap.request_id, reason: reason });
+    });
+    return;
+  }
+
   bar.style.display = 'block';
   bar.innerHTML = '';
 
@@ -1203,7 +1350,7 @@ function renderSubAgents() {
       mainTabBar.appendChild(tabBtn);
     }
     tabBtn.innerHTML = `${isActive ? '<span class="sub-tab-pulse"></span>' : '<span class="main-tab-icon">🤖</span>'} ${escapeHtml(name)} <span class="activity-dot"></span>`;
-    
+
     // Highlight the active sub-agent's tab
     if (isActive) {
       tabBtn.classList.add('agent-active');
@@ -1290,10 +1437,10 @@ function renderSubAgents() {
 
 function renderSubAgentPanel(panel, agentData, name) {
   const msgs = agentData.messages || [];
-  
+
   const fillEl = document.getElementById('subContextFill-' + name);
   if (fillEl) {
-  updateContextBar(fillEl, msgs, agentData.total_tokens, agentData.max_tokens);
+    updateContextBar(fillEl, msgs, agentData.total_tokens, agentData.max_tokens);
   }
 
   // 1. Ensure scroll container exists
@@ -1319,7 +1466,7 @@ function renderSubAgentPanel(panel, agentData, name) {
     `;
     panel.appendChild(activityBar);
   }
-  
+
   const terminateBtn = activityBar.querySelector('.terminate-btn');
   terminateBtn.onclick = () => {
     if (confirm(`Terminate agent "${name}" and return focus?`)) {
@@ -1378,8 +1525,7 @@ function renderSubAgentPanel(panel, agentData, name) {
   if (agentData.active) {
     activityBar.classList.add('active');
     if (lastMsg) {
-      const fullText = (lastMsg.reasoning_content || '') + (lastMsg.content || '') + (lastMsg.function_call ? JSON.stringify(lastMsg.function_call) : '');
-      activityText.textContent = getLastWords(fullText, 10) || 'Streaming...';
+      activityText.textContent = getActivityPreview(lastMsg);
     } else {
       activityText.textContent = 'Agent Starting...';
     }
@@ -1441,10 +1587,10 @@ function createSubMsgEl(msg, isGenerating) {
 
   const content = document.createElement('div');
   content.className = 'sub-msg-content';
-  
+
   div.appendChild(label);
   div.appendChild(content);
-  
+
   updateSubBubbleContent(div, msg, isGenerating);
   return div;
 }
@@ -1477,7 +1623,7 @@ function updateSubBubbleContent(bubble, msg, isGenerating) {
       html += renderMarkdown(textContent);
     }
   }
-  
+
   setInnerHtmlWithState(content, html);
 }
 
@@ -1518,16 +1664,16 @@ let agentDisabledTools = JSON.parse(localStorage.getItem('qwen-disabled-tools') 
 function renderAgentSelect() {
   if (agentSelect) agentSelect.innerHTML = '';
   if (settingAgentSelect) settingAgentSelect.innerHTML = '';
-  
+
   let updatedDisabledTools = false;
-  
+
   for (const agent of state.agents) {
     if (!agentDisabledTools[agent.name] && agent.tools) {
       const defaultTools = agent.default_tools || agent.tools;
       agentDisabledTools[agent.name] = agent.tools.filter(t => !defaultTools.includes(t));
       updatedDisabledTools = true;
     }
-    
+
     if (agentSelect) {
       const opt = document.createElement('option');
       opt.value = agent.index;
@@ -1543,11 +1689,11 @@ function renderAgentSelect() {
       settingAgentSelect.appendChild(opt2);
     }
   }
-  
+
   if (updatedDisabledTools) {
     localStorage.setItem('qwen-disabled-tools', JSON.stringify(agentDisabledTools));
   }
-  
+
   renderToolsForSelectedAgent();
 }
 
@@ -1556,21 +1702,21 @@ function renderToolsForSelectedAgent() {
   const idx = parseInt(settingAgentSelect.value);
   if (isNaN(idx)) return;
   const agent = state.agents.find(a => a.index === idx);
-  
+
   if (!agent || !agent.tools || agent.tools.length === 0) {
     settingToolsList.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">No tools available for this agent.</div>';
     return;
   }
-  
+
   const disabled = agentDisabledTools[agent.name] || [];
-  
+
   settingToolsList.innerHTML = agent.tools.map(toolName => `
     <label class="setting-field toggle-field">
       <span>${escapeHtml(toolName)}</span>
       <input type="checkbox" class="tool-toggle" data-agent="${escapeHtml(agent.name)}" data-tool="${escapeHtml(toolName)}" ${!disabled.includes(toolName) ? 'checked' : ''} />
     </label>
   `).join('');
-  
+
   settingToolsList.querySelectorAll('.tool-toggle').forEach(chk => {
     chk.addEventListener('change', (e) => {
       const aName = e.target.dataset.agent;
@@ -1641,16 +1787,16 @@ function autoResize(el) {
 function estimateTokens(text) {
   if (!text) return 0;
   let imageTokens = 0;
-  
+
   // 1. Detect and strip base64 image patterns (markdown format)
   // Handles both standard data: URIs and raw base64 (common in tool results)
   const imageRegex = /!\[(.*?)\]\((?:data:image\/[^;]+;base64,)?[a-zA-Z0-9+/=]{50,}\)/g;
-  
+
   // 2. Also catch raw large base64 blobs not in markdown format (e.g. raw tool outputs)
   const rawBlobRegex = /(?:data:image\/[^;]+;base64,)?[a-zA-Z0-9+/=]{500,}/g;
 
   const visionEnabled = (typeof settingVisionEnabled !== 'undefined' && settingVisionEnabled) ? settingVisionEnabled.checked : false;
-  
+
   let cleanedText = text.replace(imageRegex, (match, alt) => {
     if (visionEnabled) imageTokens += 255;
     return `[Image: ${alt}]`;
@@ -1668,10 +1814,10 @@ function estimateTokens(text) {
 
 function updateContextBar(barEl, msgs, overrideTokens, overrideMax) {
   if (!barEl) return;
-  
+
   let tokens;
   let maxContext;
-  
+
   if (overrideTokens !== undefined) {
     tokens = overrideTokens;
     maxContext = overrideMax || (settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768);
@@ -1680,11 +1826,11 @@ function updateContextBar(barEl, msgs, overrideTokens, overrideMax) {
     tokens = estimateTokens(allText);
     maxContext = settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768;
   }
-  
+
   const pct = Math.min(100, Math.max(0, (tokens / maxContext) * 100));
   barEl.style.width = pct + '%';
   barEl.title = `${tokens} / ${maxContext} tokens`;
-  
+
   if (pct > 90) {
     barEl.className = 'context-bar-fill danger';
   } else if (pct > 75) {
@@ -1695,12 +1841,25 @@ function updateContextBar(barEl, msgs, overrideTokens, overrideMax) {
 }
 
 function resetGenStats() {
+  const saStartCounts = {};
+  if (state.subAgents) {
+    for (const name in state.subAgents) {
+      saStartCounts[name] = (state.subAgents[name].messages || []).length;
+    }
+  }
+
   state.genStats = {
     startTime: performance.now(),
     firstTokenTime: 0,
+    lastTokenTime: 0,
+    activeGenTime: 0,
+    startMsgCount: state.messages ? state.messages.length : 0,
+    saStartCounts: saStartCounts,
     tokenCount: 0,
-    lastContentLength: 0,
     active: true,
+    // Reset throttle timestamps at generation start for fresh timing windows
+    lastGenStatsUpdate: 0,
+    lastSubAgentRender: 0,
   };
   if (statusTokensSec) statusTokensSec.textContent = '— t/s';
   if (statusGenInfo) statusGenInfo.textContent = 'Starting...';
@@ -1710,27 +1869,61 @@ function updateGenStats(msgs, isFinal = false) {
   if (!state.genStats.active) return;
   if (!statusTokensSec || !statusGenInfo) return;
 
-  // Estimate total tokens generated in current session (sum of assistant/function messages)
-  const assistantText = msgs
-    .filter(m => m.role === ASSISTANT || m.role === FUNCTION)
-    .map(m => (m.content || '') + (m.reasoning_content || '') + (m.function_call ? JSON.stringify(m.function_call) : ''))
-    .join('');
+  // Extremely lightweight token calculation: only look at new messages in this turn
+  // and use basic length division (O(1) string length reads) instead of regex
+  let currentGenLength = 0;
   
-  const currentTokens = estimateTokens(assistantText);
-  
-  if (currentTokens > state.genStats.tokenCount) {
-    if (state.genStats.firstTokenTime === 0) {
-      state.genStats.firstTokenTime = performance.now();
+  // 1. Main Agent Tokens
+  const startIdx = state.genStats.startMsgCount || 0;
+  for (let i = startIdx; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m.role !== 'user' && m.role !== 'function') {
+      currentGenLength += (m.content || '').length + (m.reasoning_content || '').length;
+      if (m.function_call) {
+        currentGenLength += (m.function_call.name || '').length + (typeof m.function_call.arguments === 'string' ? m.function_call.arguments.length : JSON.stringify(m.function_call.arguments || '').length);
+      }
     }
-    state.genStats.tokenCount = currentTokens;
   }
 
+  // 2. Sub-Agent Tokens
+  if (state.subAgents) {
+    for (const name in state.subAgents) {
+      const saMsgs = state.subAgents[name].messages || [];
+      const saStart = (state.genStats.saStartCounts && state.genStats.saStartCounts[name]) || 0;
+      for (let i = saStart; i < saMsgs.length; i++) {
+        const m = saMsgs[i];
+        if (m.role !== 'user' && m.role !== 'function') {
+          currentGenLength += (m.content || '').length + (m.reasoning_content || '').length;
+          if (m.function_call) {
+            currentGenLength += (m.function_call.name || '').length + (typeof m.function_call.arguments === 'string' ? m.function_call.arguments.length : JSON.stringify(m.function_call.arguments || '').length);
+          }
+        }
+      }
+    }
+  }
+
+  const currentGenTokens = Math.ceil(currentGenLength / 3.5);
   const now = performance.now();
+  
+  if (currentGenTokens > state.genStats.tokenCount) {
+    if (state.genStats.firstTokenTime === 0) {
+      state.genStats.firstTokenTime = now;
+      state.genStats.lastTokenTime = now;
+      state.genStats.activeGenTime = 0;
+    } else {
+      const delta = now - state.genStats.lastTokenTime;
+      // Cap the time addition to avoid destroying TPS during tool execution pauses
+      state.genStats.activeGenTime += Math.min(delta, 2000);
+      state.genStats.lastTokenTime = now;
+    }
+    state.genStats.tokenCount = currentGenTokens;
+  }
+
   const totalTime = (now - state.genStats.startTime) / 1000;
   
   if (state.genStats.firstTokenTime > 0) {
-    const genTime = (now - state.genStats.firstTokenTime) / 1000;
-    const tps = genTime > 0 ? state.genStats.tokenCount / genTime : 0;
+    const activeGenTimeSec = state.genStats.activeGenTime / 1000;
+    const tps = activeGenTimeSec > 0 ? state.genStats.tokenCount / activeGenTimeSec : 0;
     statusTokensSec.textContent = `${tps.toFixed(1)} t/s`;
     
     const ttft = (state.genStats.firstTokenTime - state.genStats.startTime) / 1000;
@@ -1742,6 +1935,25 @@ function updateGenStats(msgs, isFinal = false) {
   } else {
     statusGenInfo.textContent = `Waiting for LLM... (${totalTime.toFixed(1)}s)`;
   }
+}
+
+function getActivityPreview(msg) {
+  if (!msg) return 'Streaming...';
+
+  // Tool calls: show tool name + tail of arguments being generated
+  if (msg.function_call) {
+    const fc = msg.function_call;
+    const name = fc.name || 'tool';
+    const args = typeof fc.arguments === 'string' ? fc.arguments : JSON.stringify(fc.arguments || '');
+    if (args.length > 0) {
+      return `🛠️ ${name}: ${getLastWords(args.slice(-300), 20)}`;
+    }
+    return `🛠️ Calling ${name}...`;
+  }
+
+  // Regular content or reasoning
+  const text = ((msg.reasoning_content || '') + (msg.content || '')).slice(-300);
+  return getLastWords(text, 20) || 'Streaming...';
 }
 
 function getLastWords(text, count) {
@@ -1756,9 +1968,12 @@ function getLastWords(text, count) {
 // ── Utilities ────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function formatMultimodalContent(text) {
@@ -1786,16 +2001,16 @@ function insertImageMarkdown(base64Data, filename) {
 
 function processImageFile(file) {
   if (!file || !file.type.startsWith('image/')) return;
-  
+
   const maxSize = settingMaxImageSize ? parseInt(settingMaxImageSize.value) : 1024;
   const reader = new FileReader();
-  
+
   reader.onload = (e) => {
     const img = new Image();
     img.onload = () => {
       let width = img.width;
       let height = img.height;
-      
+
       if (width > maxSize || height > maxSize) {
         if (width > height) {
           height = Math.round((height * maxSize) / width);
@@ -1805,13 +2020,13 @@ function processImageFile(file) {
           height = maxSize;
         }
       }
-      
+
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, width, height);
-      
+
       const mimeType = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
       const dataUrl = canvas.toDataURL(mimeType, 0.9);
       insertImageMarkdown(dataUrl, file.name || 'image');
@@ -1880,12 +2095,12 @@ chatInput.addEventListener('keydown', (e) => {
 sendBtn.addEventListener('click', sendMessage);
 stopBtn.addEventListener('click', () => send({ type: 'stop' }));
 retryBtn.addEventListener('click', () => {
-  lastRenderedCount = -1;
+  lastRenderedCount = Infinity;
   send({ type: 'retry' });
 });
 resetBtn.addEventListener('click', () => {
   if (confirm('Reset the entire conversation?')) {
-    lastRenderedCount = -1;
+    lastRenderedCount = Infinity;
     send({ type: 'reset' });
   }
 });
@@ -1916,7 +2131,7 @@ function getGenerateCfg() {
   if ($('#setting-frequency-penalty')) cfg.frequency_penalty = parseFloat($('#setting-frequency-penalty').value);
   if ($('#setting-max-tokens')) cfg.max_tokens = parseInt($('#setting-max-tokens').value) || 2048;
   if ($('#setting-max-context')) cfg.max_input_tokens = parseInt($('#setting-max-context').value) || 32768;
-  
+
   if ($('#setting-max-turns')) cfg.max_turns = parseInt($('#setting-max-turns').value) || 50;
   if ($('#setting-auto-continue')) cfg.auto_continue = $('#setting-auto-continue').checked;
   if ($('#setting-read-file-limit')) cfg.read_file_limit = parseInt($('#setting-read-file-limit').value) || 1000;
@@ -1927,7 +2142,7 @@ function getGenerateCfg() {
   if ($('#setting-mcp-servers') && $('#setting-mcp-servers').value.trim()) {
     try {
       cfg.mcpServers = JSON.parse($('#setting-mcp-servers').value.trim());
-    } catch(e) {
+    } catch (e) {
       console.warn('Invalid MCP Servers JSON:', e);
     }
   }
@@ -1946,7 +2161,7 @@ function sendMessage(inputEl) {
   const targetInput = inputEl instanceof HTMLElement ? inputEl : chatInput;
   const rawText = targetInput.value.trim();
   if (!rawText) return;
-  
+
   const text = formatMultimodalContent(rawText);
   targetInput.value = '';
   autoResize(targetInput);
@@ -1980,7 +2195,7 @@ function sendMessage(inputEl) {
 
 function continueMessage() {
   if (state.generating) return;
-  
+
   const text = "[SYSTEM]: Please continue.";
   resetGenStats();
   send({

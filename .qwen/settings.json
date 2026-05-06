@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(n:\\work\\stuff\\mine\\qwen-code\\packages\\core\\src\\tools/**)",
+      "Read(n:\\work\\stuff\\mine\\qwen-code\\packages\\core\\src\\tools\\write-file.ts/**)"
+    ]
+  },
+  "$version": 3
+}

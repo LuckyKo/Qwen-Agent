@@ -864,27 +864,32 @@ def _raise_or_delay(
 ) -> Tuple[int, float]:
     """Retry with exponential backoff"""
 
+    # Note: All raises use `from None` to break Python's implicit exception chaining.
+    # Without this, when _raise_or_delay is called from within retry_model_service_iterator's
+    # except block, a bare `raise e` would set e.__context__ = e (self-referencing chain)
+    # because we're still inside the active handler context for that same exception.
+
     if max_retries <= 0:  # no retry
-        raise e
+        raise e from None
 
     # Bad request, e.g., incorrect config or input
     if e.code == '400':
-        raise e
+        raise e from None
 
     # If harmful input or output detected, let it fail
     if e.code == 'DataInspectionFailed':
-        raise e
+        raise e from None
     if 'inappropriate content' in str(e):
-        raise e
+        raise e from None
 
     # Retry is meaningless if the input is too long
     if 'maximum context length' in str(e):
-        raise e
+        raise e from None
 
     logger.warning('ModelServiceError - ' + str(e).strip('\n'))
 
     if num_retries >= max_retries:
-        raise ModelServiceError(exception=Exception(f'Maximum number of retries ({max_retries}) exceeded.'))
+        raise ModelServiceError(exception=Exception(f'Maximum number of retries ({max_retries}) exceeded.')) from None
 
     num_retries += 1
     jitter = 1.0 + random.random()

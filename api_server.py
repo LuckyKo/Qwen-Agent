@@ -378,10 +378,39 @@ def create_app(agents, agent_pool, config=None):
             ],
             'current_model': getattr(get_agent().llm, 'model', 'Unknown') if hasattr(get_agent(), 'llm') and get_agent().llm else 'Unknown',
         }
-        if generating:
-            orch_tools = st['agents'][0]['tools'] if st['agents'] else []
-            print(f"[DEBUG] build_state: orchestrator tools count={len(orch_tools)}")
-        return st
+
+    def build_stream_update(responses, cached_h_stats=None, sub_agents=None):
+        """Build a lightweight streaming delta (skips re-serializing stable history).
+
+        Args:
+            responses: Current partial response messages from the agent runner.
+            cached_h_stats: Pre-computed history stats to avoid O(n) recalculation each tick.
+                           If None, falls back to get_history_stats(session['history']).
+            sub_agents: Pre-serialized sub-agent state. Only recompute every ~5 ticks;
+                       on intermediate ticks the client tolerates slight staleness.
+        """
+        history_count = len(session['history'])
+
+        # Only serialize the changing response messages (history is already on the client)
+        response_msgs = [serialize_message(m, history_count + i) for i, m in enumerate(responses)] if responses else []
+
+        # Stats: use cached h_stats when available to skip O(n) history iteration each tick
+        h_stats = cached_h_stats if cached_h_stats is not None else get_history_stats(session['history'])
+        r_stats = get_history_stats(responses) if responses else {'tokens': 0, 'words': 0}
+
+        orch_agent = get_agent()
+        return {
+            'history_count': history_count,
+            'response_messages': response_msgs,
+            'sub_agents': sub_agents if sub_agents is not None else get_sub_agent_state(),
+            'active_stack': get_active_stack(),
+            'approvals': get_approvals(),
+            'generating': True,
+            'total_tokens': h_stats['tokens'] + r_stats['tokens'],
+            'total_words': h_stats['words'] + r_stats['words'],
+            'max_tokens': get_agent_max_tokens(orch_agent),
+            'current_model': getattr(orch_agent.llm, 'model', 'Unknown') if hasattr(orch_agent, 'llm') and orch_agent.llm else 'Unknown',
+        }
 
     async def broadcast(data):
         """Send JSON to all connected WebSocket clients."""
@@ -504,7 +533,13 @@ def create_app(agents, agent_pool, config=None):
                     print(f"[MCP] Failed to initialize MCP tools: {e}")
                     traceback.print_exc()
 
+            # ── Pre-compute history stats ONCE before streaming loop ──
+            # This avoids O(n) get_history_stats(session['history']) every ~150ms tick.
+            cached_h_stats = get_history_stats(session['history'])
+
             try:
+                sub_agents_cache = None   # lazy sub-agent state cache
+                tick_num = 0              # counts stream ticks for periodic refresh
                 for partial in agent_runner.run(history_for_agent):
                     if session['stop_requested'] or session['generation_id'] != gen_id:
                         if agent_pool:
@@ -513,12 +548,19 @@ def create_app(agents, agent_pool, config=None):
 
                     responses = partial
                     now = time.time()
-                    if now - last_send > 0.15:  # ~6.5Hz throttle (prevents saturating UI thread with large payloads)
-                        state = build_state(responses, generating=True)
+                    if now - last_send > 0.15:  # ~6.5Hz throttle
+                        # Refresh sub-agent state every 5 ticks (~750ms) to save serialization cost;
+                        # on intermediate ticks the client tolerates slight staleness in sub-agent messages,
+                        # while active_stack + approvals are still sent fresh each tick.
+                        if tick_num % 5 == 0:
+                            sub_agents_cache = get_sub_agent_state()
+
+                        delta = build_stream_update(responses, cached_h_stats=cached_h_stats, sub_agents=sub_agents_cache)
                         asyncio.run_coroutine_threadsafe(
-                            send_queue.put({'type': 'state', **state}), loop
+                            send_queue.put({'type': 'stream_update', **delta}), loop
                         )
                         last_send = now
+                        tick_num += 1
             finally:
                 if has_llm:
                     agent_runner.llm.generate_cfg = old_cfg
