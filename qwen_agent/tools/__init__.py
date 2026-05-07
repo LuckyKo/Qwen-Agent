@@ -18,6 +18,7 @@ from .code_interpreter import CodeInterpreter
 from .doc_parser import DocParser
 from .extract_doc_vocabulary import ExtractDocVocabulary
 from .image_gen import ImageGen
+from .python_compiler import PythonCompiler
 from .python_executor import PythonExecutor
 from .retrieval import Retrieval
 from .image_zoom_in_qwen3vl import ImageZoomInToolQwen3VL
@@ -47,6 +48,7 @@ __all__ = [
     'HybridSearch',
     'FrontPageSearch',
     'ExtractDocVocabulary',
+    'PythonCompiler',
     'PythonExecutor',
     'MCPManager',
     'WebSearch',

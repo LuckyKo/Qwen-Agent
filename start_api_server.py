@@ -23,7 +23,10 @@ from qwen_agent.tools import (
     doc_parser,
     extract_doc_vocabulary,
     code_interpreter,
+    python_compiler,
 )
+from qwen_agent.tools.custom import SystemInfo
+from qwen_agent.settings import DEFAULT_WORKSPACE
 
 
 # ── Reuse DDGSearch from start_multi_agent ────────────────────────────────────
@@ -80,7 +83,7 @@ DEFAULT_TOOLS = {
     'orchestrator': [
         'call_agent', 'dismiss_agent', 'list_agents',
         'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'read_file', 'view_image', 'list_dir', 'grep',
-        'ddg_search', 'web_extractor', 'storage', 'retrieval'
+        'ddg_search', 'web_extractor', 'storage', 'retrieval', 'system_info'
     ],
     'coder': [
         'call_agent', 'list_agents',
@@ -115,28 +118,29 @@ def initialize_agents():
 
     # Instantiate heavy tools ONCE to share across all agents and prevent OOM
     shared_tools = {}
+    shared_tools['system_info'] = SystemInfo(agent_pool=agent_pool)
     shared_tools['ddg_search'] = DDGSearch()
     try:
         shared_tools['image_gen'] = image_gen.ImageGen(llm_cfg=llm_cfg)
     except Exception:
         pass
-    shared_tools['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': 'workspace'})
+    shared_tools['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': DEFAULT_WORKSPACE})
     shared_tools['storage'] = storage.Storage()
     
     from qwen_agent.tools import retrieval
-    shared_tools['retrieval'] = retrieval.Retrieval(cfg={'work_dir': 'workspace'})
-    shared_tools['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': 'workspace'})
-    shared_tools['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': 'workspace'})
-    shared_tools['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
+    shared_tools['retrieval'] = retrieval.Retrieval(cfg={'work_dir': DEFAULT_WORKSPACE})
+    shared_tools['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': DEFAULT_WORKSPACE})
+    shared_tools['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': DEFAULT_WORKSPACE})
+    shared_tools['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': DEFAULT_WORKSPACE})
     
     try:
-        shared_tools['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': 'workspace'})
+        shared_tools['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': DEFAULT_WORKSPACE})
     except Exception:
         pass
         
     try:
-        from qwen_agent.tools import python_executor
-        shared_tools['python_executor'] = python_executor.PythonExecutor(cfg={'work_dir': 'workspace'})
+        from qwen_agent.tools import python_compiler
+        shared_tools['python_compiler'] = python_compiler.PythonCompiler(cfg={'work_dir': DEFAULT_WORKSPACE})
     except Exception:
         pass
 

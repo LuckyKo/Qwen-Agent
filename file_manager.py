@@ -11,12 +11,13 @@ import re
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
 from datetime import datetime
+from qwen_agent.settings import DEFAULT_WORKSPACE
 
 
 class FileManager:
     """Manages file operations with a permission system."""
     
-    def __init__(self, base_dir: str = 'workspace'):
+    def __init__(self, base_dir: str = DEFAULT_WORKSPACE):
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(exist_ok=True)
         

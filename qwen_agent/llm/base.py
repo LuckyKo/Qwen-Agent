@@ -27,7 +27,8 @@ from qwen_agent.log import logger
 from qwen_agent.settings import DEFAULT_MAX_INPUT_TOKENS
 from qwen_agent.utils.tokenization_qwen import tokenizer
 from qwen_agent.utils.utils import (extract_text_from_message, format_as_multimodal_message, format_as_text_message,
-                                    has_chinese_messages, json_dumps_compact, merge_generate_cfgs, print_traceback)
+                                    get_message_stats, has_chinese_messages, json_dumps_compact, merge_generate_cfgs,
+                                    print_traceback)
 
 LLM_REGISTRY = {}
 
@@ -193,6 +194,16 @@ class BaseChatModel(ABC):
 
         # Not precise. It's hard to estimate tokens related with function calling and multimodal items.
         max_input_tokens = generate_cfg.pop('max_input_tokens', DEFAULT_MAX_INPUT_TOKENS)
+        
+        # Strip agent-specific settings that should not be sent to LLM APIs
+        agent_settings = [
+            'disabled_tools', 'max_turns', 'auto_continue', 'auto_rollback_on_loop',
+            'read_file_limit', 'mcpServers', 'work_access_folders',
+            'grep_char_limit', 'shell_char_limit', 'code_char_limit'
+        ]
+        for setting in agent_settings:
+            generate_cfg.pop(setting, None)
+            
         if max_input_tokens > 0:
             messages = _truncate_input_messages_roughly(
                 messages=messages,
@@ -634,18 +645,7 @@ def _truncate_input_messages_roughly(messages: List[Message], max_tokens: int) -
                 )
 
     def _count_tokens(msg: Message) -> int:
-        if msg.role == ASSISTANT and msg.function_call:
-            return tokenizer.count_tokens(f'{msg.function_call}')
-        
-        text = extract_text_from_message(msg, add_upload_info=True)
-        import re
-        image_tokens = 0
-        def repl(match):
-            nonlocal image_tokens
-            image_tokens += 255
-            return f"[Image: {match.group(1)}]"
-        text = re.sub(r'!\[(.*?)\]\(data:image/[^;]+;base64,[a-zA-Z0-9+/=]+\)', repl, text)
-        return tokenizer.count_tokens(text) + image_tokens
+        return get_message_stats(msg)['tokens']
 
     def _truncate_message(msg: Message, max_tokens: int, keep_both_sides: bool = False):
         if isinstance(msg.content, str):

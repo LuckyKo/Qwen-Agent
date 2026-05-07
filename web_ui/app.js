@@ -49,6 +49,7 @@ const state = {
   totalTokens: 0,
   totalWords: 0,
   maxTokens: 32768,
+  autoSecurity: false,
 };
 
 let ws = null;
@@ -107,6 +108,7 @@ const imageInput = $('#imageInput');
 const settingMcpServers = $('#setting-mcp-servers');
 
 const afkToggle = $('#afkToggle');
+const autoSecurityToggle = $('#autoSecurityToggle');
 const settingAfkMessage = $('#setting-afk-message');
 
 // Range outputs
@@ -331,6 +333,7 @@ function saveSettings() {
   if (settingVisionEnabled) s['vision-enabled'] = settingVisionEnabled.checked;
   if (afkToggle) s['afk-enabled'] = afkToggle.checked;
   if (settingAfkMessage) s['afk-message'] = settingAfkMessage.value;
+  if (autoSecurityToggle) s['auto-security'] = autoSecurityToggle.checked;
 
   localStorage.setItem('qwen-settings', JSON.stringify(s));
 }
@@ -422,6 +425,10 @@ function loadSettings() {
     if (settingAfkMessage && s['afk-message'] !== undefined) {
       settingAfkMessage.value = s['afk-message'];
     }
+    if (autoSecurityToggle && s['auto-security'] !== undefined) {
+      autoSecurityToggle.checked = s['auto-security'];
+      state.autoSecurity = s['auto-security'];
+    }
   } catch (e) {
     console.error('Failed to load settings', e);
   }
@@ -452,6 +459,16 @@ if (afkToggle) {
 
 if (settingAfkMessage) {
   settingAfkMessage.addEventListener('input', debouncedSaveSettings);
+}
+
+if (autoSecurityToggle) {
+  autoSecurityToggle.addEventListener('change', () => {
+    state.autoSecurity = autoSecurityToggle.checked;
+    saveSettings();
+    if (autoSecurityToggle.checked) {
+      renderApprovals();
+    }
+  });
 }
 
 loadSettings();
@@ -668,6 +685,27 @@ function handleServerMessage(data) {
       renderApprovals();
       break;
 
+    case 'security_response': {
+      const { request_id, response } = data;
+      const card = document.querySelector(`.approval-card[data-request-id="${request_id}"]`);
+      if (card) {
+         let respDiv = card.querySelector('.security-response-box');
+         if (!respDiv) {
+            respDiv = document.createElement('div');
+            respDiv.className = 'security-response-box';
+            respDiv.style = "margin-top: 8px; padding: 8px; background: rgba(255,193,7,0.15); border-left: 3px solid #ffc107; font-size: 13px; color: var(--text-color);";
+            card.insertBefore(respDiv, card.querySelector('.approval-actions'));
+         }
+         respDiv.innerHTML = `<strong>🛡️ Security Expert:</strong><div style="margin-top:4px;">${renderMarkdown(response)}</div>`;
+         const askBtn = card.querySelector('.ask-security-btn');
+         if (askBtn) {
+            askBtn.innerHTML = '🛡️ Ask Security';
+            askBtn.disabled = false;
+         }
+      }
+      break;
+    }
+
     case 'error':
       state.generating = false;
       appendSystemBubble(`⚠️ Error: ${data.message}`);
@@ -799,10 +837,21 @@ function updateMainActivityBar() {
     } else {
       activityText.textContent = 'Agent Starting...';
     }
+    if (state.totalTokens !== undefined) {
+      activityText.textContent += ` (${state.totalWords} words, ${state.totalTokens} tokens)`;
+    }
   } else {
     bar.classList.remove('active');
     if (chatTab) chatTab.classList.remove('agent-active');
     activityText.textContent = 'Agent Idle';
+    if (state.totalTokens !== undefined) {
+      activityText.textContent += ` (${state.totalWords} words, ${state.totalTokens} tokens)`;
+    }
+  }
+
+  // Also update main chat tab
+  if (chatTab) {
+    chatTab.innerHTML = `<span class="main-tab-icon">💬</span> Chat`;
   }
 }
 
@@ -906,23 +955,7 @@ function createMessageEl(msg, index) {
     html += renderToolResult(msg);
   } else {
     // Regular text (user or assistant)
-    const textContent = msg.content || '';
-
-    // Handle <think> tags in content (fallback for models that don't use reasoning_content field)
-    const thinkMatch = textContent.match(/<think>([\s\S]*?)(<\/think>|$)/);
-    if (thinkMatch) {
-      const thought = thinkMatch[1];
-      const isOpen = !textContent.includes('</think>');
-      const before = textContent.substring(0, textContent.indexOf('<think>'));
-      const after = textContent.includes('</think>')
-        ? textContent.substring(textContent.indexOf('</think>') + 8)
-        : '';
-      if (before.trim()) html += renderMarkdown(before);
-      html += renderThinkingBlock(thought, isOpen);
-      if (after.trim()) html += renderMarkdown(after);
-    } else {
-      html += renderMarkdown(textContent);
-    }
+    html += renderMarkdown(msg.content || '');
   }
 
   contentDiv.innerHTML = html;
@@ -947,19 +980,7 @@ function updateBubbleContent(bubble, msg) {
   } else if (msg.role === 'function') {
     html += renderToolResult(msg);
   } else {
-    const text = msg.content || '';
-    const thinkMatch = text.match(/<think>([\s\S]*?)(<\/think>|$)/);
-    if (thinkMatch) {
-      const thought = thinkMatch[1];
-      const isOpen = !text.includes('</think>');
-      const before = text.substring(0, text.indexOf('<think>'));
-      const after = text.includes('</think>') ? text.substring(text.indexOf('</think>') + 8) : '';
-      if (before.trim()) html += renderMarkdown(before);
-      html += renderThinkingBlock(thought, isOpen);
-      if (after.trim()) html += renderMarkdown(after);
-    } else {
-      html += renderMarkdown(text);
-    }
+    html += renderMarkdown(msg.content || '');
   }
   setInnerHtmlWithState(contentDiv, html);
 }
@@ -980,6 +1001,22 @@ function setInnerHtmlWithState(el, html) {
 
 function renderMarkdown(text) {
   if (!text || !text.trim()) return '';
+
+  // Handle <think> tags in content (fallback for models that don't use reasoning_content field)
+  const thinkMatch = text.match(/<think>([\s\S]*?)(<\/think>|$)/);
+  if (thinkMatch) {
+    const thought = thinkMatch[1];
+    const isOpen = !text.includes('</think>');
+    const before = text.substring(0, text.indexOf('<think>'));
+    const after = text.includes('</think>') ? text.substring(text.indexOf('</think>') + 8) : '';
+    
+    let html = '';
+    if (before.trim()) html += renderMarkdown(before);
+    html += renderThinkingBlock(thought, isOpen);
+    if (after.trim()) html += renderMarkdown(after);
+    return html;
+  }
+
   try {
     return marked.parse(text);
   } catch {
@@ -1252,12 +1289,25 @@ function renderApprovals() {
     return;
   }
 
+  // Auto-security check
+  if (state.autoSecurity) {
+    const pending = [...state.approvals];
+    state.approvals = [];
+    bar.style.display = 'none';
+    
+    pending.forEach(ap => {
+      send({ type: 'ask_security', request_id: ap.request_id, auto_apply: true });
+    });
+    return;
+  }
+
   bar.style.display = 'block';
   bar.innerHTML = '';
 
   for (const ap of state.approvals) {
     const card = document.createElement('div');
     card.className = 'approval-card';
+    card.dataset.requestId = ap.request_id;
 
     let argsHtml = '';
     try {
@@ -1275,13 +1325,14 @@ function renderApprovals() {
         <span>Agent: <strong>${escapeHtml(ap.agent_name)}</strong></span>
         <span>Tool: <strong>${escapeHtml(ap.tool_name)}</strong></span>
       </div>
-      <div class="approval-desc">${escapeHtml(ap.description)}</div>
+      <div class="approval-desc">${renderMarkdown(ap.description)}</div>
       <details class="approval-args">
-        <summary>Arguments</summary>
+        <summary>Raw Arguments</summary>
         <pre><code>${argsHtml}</code></pre>
       </details>
       <div class="approval-actions">
         <button class="btn btn-primary btn-sm" onclick="approveRequest('${ap.request_id}')">✅ Approve</button>
+        <button class="btn btn-warning btn-sm ask-security-btn" onclick="askSecurity('${ap.request_id}', this)">🛡️ Ask Security</button>
         <button class="btn btn-danger btn-sm" onclick="showRejectInput('${ap.request_id}', this)">❌ Reject</button>
       </div>
     `;
@@ -1292,6 +1343,13 @@ function renderApprovals() {
 // Global functions for inline onclick handlers
 window.approveRequest = function (requestId) {
   send({ type: 'approve', request_id: requestId });
+};
+
+window.askSecurity = function (requestId, btn) {
+  const originalHtml = btn.innerHTML;
+  btn.innerHTML = '⏳ Checking...';
+  btn.disabled = true;
+  send({ type: 'ask_security', request_id: requestId, auto_apply: false });
 };
 
 window.showRejectInput = function (requestId, btn) {
@@ -1815,17 +1873,8 @@ function estimateTokens(text) {
 function updateContextBar(barEl, msgs, overrideTokens, overrideMax) {
   if (!barEl) return;
 
-  let tokens;
-  let maxContext;
-
-  if (overrideTokens !== undefined) {
-    tokens = overrideTokens;
-    maxContext = overrideMax || (settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768);
-  } else {
-    const allText = msgs.map(m => (m.content || '') + (m.function_call ? JSON.stringify(m.function_call) : '') + (m.reasoning_content || '')).join(' ').trim();
-    tokens = estimateTokens(allText);
-    maxContext = settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768;
-  }
+  const tokens = overrideTokens || 0;
+  const maxContext = overrideMax || (settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768);
 
   const pct = Math.min(100, Math.max(0, (tokens / maxContext) * 100));
   barEl.style.width = pct + '%';
@@ -2079,7 +2128,6 @@ chatInput.addEventListener('paste', (e) => {
 // ── Event listeners ──────────────────────────────────────────────────────────
 
 chatInput.addEventListener('input', () => autoResize(chatInput));
-retryBtn.onclick = retryGeneration;
 continueBtn.onclick = continueMessage;
 
 chatInput.addEventListener('keydown', (e) => {
@@ -2096,7 +2144,7 @@ sendBtn.addEventListener('click', sendMessage);
 stopBtn.addEventListener('click', () => send({ type: 'stop' }));
 retryBtn.addEventListener('click', () => {
   lastRenderedCount = Infinity;
-  send({ type: 'retry' });
+  retryGeneration();
 });
 resetBtn.addEventListener('click', () => {
   if (confirm('Reset the entire conversation?')) {
@@ -2134,6 +2182,7 @@ function getGenerateCfg() {
 
   if ($('#setting-max-turns')) cfg.max_turns = parseInt($('#setting-max-turns').value) || 50;
   if ($('#setting-auto-continue')) cfg.auto_continue = $('#setting-auto-continue').checked;
+  if ($('#setting-auto-rollback')) cfg.auto_rollback_on_loop = $('#setting-auto-rollback').checked;
   if ($('#setting-read-file-limit')) cfg.read_file_limit = parseInt($('#setting-read-file-limit').value) || 1000;
   if ($('#setting-grep-char-limit')) cfg.grep_char_limit = parseInt($('#setting-grep-char-limit').value);
   if ($('#setting-shell-char-limit')) cfg.shell_char_limit = parseInt($('#setting-shell-char-limit').value);

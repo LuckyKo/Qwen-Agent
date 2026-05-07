@@ -149,3 +149,36 @@ class AgentInstanceLogger:
         # so we must update our tracking to match, otherwise it will re-append
         # all the remaining messages as "new".
         self.data["history"] = [self._format_message(msg) for msg in new_history]
+
+    def rollback(self, count: int):
+        """
+        Rollback the history by popping N messages and re-writing the log file.
+        This is used when an orchestrator turn is undone (e.g. on loop detection).
+        """
+        if count <= 0:
+            return
+        
+        # Pop from internal history
+        for _ in range(count):
+            if self.data["history"]:
+                self.data["history"].pop()
+            else:
+                break
+        
+        # Re-write the log file (Metadata + remaining History)
+        try:
+            lines = [json.dumps({"metadata": self.data["metadata"]}, ensure_ascii=False)]
+            for msg in self.data["history"]:
+                lines.append(json.dumps(msg, ensure_ascii=False))
+            
+            with open(self.log_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines) + '\n')
+        except Exception as e:
+            logger.error(f"Failed to rollback agent log {self.log_path}: {e}")
+
+    def truncate_to(self, target_len: int):
+        """Truncate the history to a specific target length and re-write the file."""
+        current_len = len(self.data["history"])
+        if target_len >= current_len:
+            return
+        self.rollback(current_len - target_len)

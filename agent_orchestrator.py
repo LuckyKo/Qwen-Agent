@@ -375,7 +375,7 @@ class OrchestratorAgent(Assistant):
             warning = (
                 f"\n\n{warning_text} {usage_pct:.1f}% capacity ({current_tokens}/{max_tokens} tokens). "
                 "Consider using the `compress_context` tool to summarize old history and free up space. "
-                "Propose a fraction (e.g. 0.2 for 20%) and a justification. The summary will be sent for approval.]"
+                "Propose a fraction (e.g. 0.4 for 40%) and a justification. The summary will be sent for approval.]"
             )
             # Find the most recent message to append warning (temporarily)
             if messages:

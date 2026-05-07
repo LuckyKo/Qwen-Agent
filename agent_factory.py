@@ -12,10 +12,11 @@ from qwen_agent.log import logger
 from qwen_agent.tools.code_interpreter import CodeInterpreter
 from qwen_agent.tools.custom import (
     ReadFile, ViewImage, WriteFile, EditFile, ListDir, Grep,
-    DeleteFile, CopyFile, MoveFile, DismissAgent, ListAgents, ShellCmd,
+    DeleteFile, CopyFile, MoveFile, DismissAgent, ListAgents, ShellCmd, SystemInfo,
 )
 from qwen_agent.tools.custom.compression_tools import CompressContext
 from soul_loader import create_agent_from_soul
+from qwen_agent.settings import DEFAULT_WORKSPACE
 
 
 def register_standard_tools(agent, agent_pool, agent_name: str):
@@ -92,6 +93,12 @@ def register_standard_tools(agent, agent_pool, agent_name: str):
     shell_tool.agent_name = agent_name
     agent.function_map['shell_cmd'] = shell_tool
 
+    # ── System Information ──
+    info_tool = SystemInfo()
+    info_tool.agent_pool = agent_pool
+    info_tool.agent_name = agent_name
+    agent.function_map['system_info'] = info_tool
+
     # ── Code Interpreter (sandbox) ──
     try:
         code_tool = CodeInterpreter(cfg={'work_dir': str(agent_pool.operation_manager.base_dir)})
@@ -101,16 +108,16 @@ def register_standard_tools(agent, agent_pool, agent_name: str):
 
     # ── Built-in qwen_agent tools ──
     from qwen_agent.tools.web_extractor import WebExtractor
-    agent.function_map['web_extractor'] = WebExtractor(cfg={'work_dir': 'workspace'})
+    agent.function_map['web_extractor'] = WebExtractor(cfg={'work_dir': DEFAULT_WORKSPACE})
 
     from qwen_agent.tools.storage import Storage
     agent.function_map['storage'] = Storage()
 
     from qwen_agent.tools.retrieval import Retrieval
-    agent.function_map['retrieval'] = Retrieval(cfg={'work_dir': 'workspace'})
+    agent.function_map['retrieval'] = Retrieval(cfg={'work_dir': DEFAULT_WORKSPACE})
 
     from qwen_agent.tools.extract_doc_vocabulary import ExtractDocVocabulary
-    agent.function_map['extract_doc_vocabulary'] = ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
+    agent.function_map['extract_doc_vocabulary'] = ExtractDocVocabulary(cfg={'work_dir': DEFAULT_WORKSPACE})
 
     # ── User approval system notice ──
     agent.system_message += """
@@ -123,7 +130,7 @@ User Approval System:
 
 Workspace & Path Reference:
 - ALL file tool paths (read_file, write_file, edit_file, list_dir, grep, etc.) are RELATIVE to the workspace root.
-  Example: to read "workspace/src/main.py", use path "src/main.py" (NOT an absolute host path).
+  Example: to read "src/main.py" within your workspace, use path "src/main.py" (NOT an absolute host path).
 - shell_cmd executes commands with the workspace directory as the working directory.
 - code_interpreter runs Python inside a Docker container where the workspace is mounted at "/workspace/".
   So a file at "src/main.py" (used by host tools) is available at "/workspace/src/main.py" inside Docker.

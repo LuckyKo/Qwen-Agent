@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
+from qwen_agent.settings import DEFAULT_WORKSPACE
 
 
 class OperationType(Enum):
@@ -62,7 +63,7 @@ class OperationManager:
     user_approve() or user_reject() to unblock the thread.
     """
 
-    def __init__(self, base_dir: str = 'workspace', agent_pool=None):
+    def __init__(self, base_dir: str = DEFAULT_WORKSPACE, agent_pool=None):
         self.base_dir = Path(base_dir).resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.agent_pool = agent_pool

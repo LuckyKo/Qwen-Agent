@@ -145,6 +145,10 @@
                   <span>AFK</span>
                   <input type="checkbox" id="afkToggle" />
                 </label>
+                <label class="setting-field toggle-field" style="margin: 0; padding: 0 8px; font-size: 12px; cursor: pointer; color: #ffc107;" title="Automatically ask Security Expert to check and approve commands">
+                  <span>🛡️ Auto-Ask</span>
+                  <input type="checkbox" id="autoSecurityToggle" />
+                </label>
                 <button id="continueBtn" class="btn btn-secondary" title="Continue generation (Ctrl+Shift+Enter)">⏩ Continue</button>
                 <button id="retryBtn" class="btn btn-secondary" title="Retry last turn (Ctrl+Shift+R)">🔄 Retry</button>
                 <button id="stopBtn" class="btn btn-stop" style="display:none;">⏹ Stop</button>
@@ -341,6 +345,10 @@
                   <label class="setting-field toggle-field">
                     <span>Auto-Continue (Truncation)</span>
                     <input type="checkbox" id="setting-auto-continue" checked />
+                  </label>
+                  <label class="setting-field toggle-field">
+                    <span>Auto-Rollback on Loop</span>
+                    <input type="checkbox" id="setting-auto-rollback" checked />
                   </label>
                   <label class="setting-field">
                     <span>Read File Limit (Lines) <output id="val-read-file-limit">1000</output></span>

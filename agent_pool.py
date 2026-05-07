@@ -18,6 +18,7 @@ from qwen_agent.llm.schema import (
     ASSISTANT, CONTENT, FUNCTION, ROLE, SYSTEM, USER, Message,
 )
 from qwen_agent.utils.utils import extract_text_from_message
+from qwen_agent.settings import DEFAULT_WORKSPACE
 
 from agent_logger import AgentInstanceLogger
 
@@ -35,7 +36,7 @@ class AgentPool:
         
         # Initialize OperationManager for blocking approvals
         from operation_manager import OperationManager
-        self.operation_manager = OperationManager(agent_pool=self)
+        self.operation_manager = OperationManager(base_dir=DEFAULT_WORKSPACE, agent_pool=self)
         
         # Persistent conversation histories for each named instance
         self.instance_conversations: Dict[str, List] = {}
@@ -70,11 +71,35 @@ class AgentPool:
         self.terminated_instances.add(instance_name)
         self.stopped = True
 
+    def capture_snapshots(self) -> Dict[str, int]:
+        """Capture the current history lengths of all active sub-agent instances."""
+        snapshots = {}
+        for name, conv in self.instance_conversations.items():
+            snapshots[name] = len(conv)
+        return snapshots
+
+    def rollback_to_snapshots(self, snapshots: Dict[str, int]):
+        """Rollback all sub-agent instances to the lengths recorded in the snapshots."""
+        for name, target_len in snapshots.items():
+            # Rollback history list
+            if name in self.instance_conversations:
+                conv = self.instance_conversations[name]
+                if len(conv) > target_len:
+                    del conv[target_len:]
+            
+            # Rollback persistent log file
+            if name in self.instance_loggers:
+                self.instance_loggers[name].truncate_to(target_len)
+        
+        # Clear any sub-agents that were created AFTER the snapshot?
+        # (This is harder since they might be in self.agents, but they are mostly harmless)
+        pass
+
     def get_logger(self, instance_name: str, agent_class: str, base_metadata: Optional[Dict] = None) -> AgentInstanceLogger:
         """Get or create a logger for an agent instance."""
         if instance_name not in self.instance_loggers:
             # Ensure workspace/logs exists
-            log_dir = Path('workspace/logs')
+            log_dir = self.operation_manager.base_dir / 'logs'
             log_dir.mkdir(parents=True, exist_ok=True)
             
             self.instance_loggers[instance_name] = AgentInstanceLogger(

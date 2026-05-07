@@ -25,7 +25,7 @@ class CompressContext(BaseTool):
             'fraction': {
                 'type': 'number',
                 'description': 'The fraction of history to summarize (e.g. 0.5 for 50%). Max 0.8.',
-                'minimum': 0.1,
+                'minimum': 0.3,
                 'maximum': 0.8
             },
             'mode': {

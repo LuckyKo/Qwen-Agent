@@ -5,6 +5,7 @@ from .manager_ops import (
     ListAgents,
 )
 from .shell_cmd import ShellCmd
+from .system_info import SystemInfo
 
 __all__ = [
     'ReadFile',
@@ -20,4 +21,5 @@ __all__ = [
     'DismissAgent',
     'ListAgents',
     'ShellCmd',
+    'SystemInfo',
 ]

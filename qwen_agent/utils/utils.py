@@ -34,7 +34,7 @@ import requests
 import soundfile as sf
 from pydantic import BaseModel
 
-from qwen_agent.llm.schema import ASSISTANT, DEFAULT_SYSTEM_MESSAGE, FUNCTION, SYSTEM, USER, ContentItem, Message
+from qwen_agent.llm.schema import ASSISTANT, DEFAULT_SYSTEM_MESSAGE, FUNCTION, ROLE, SYSTEM, USER, ContentItem, Message
 from qwen_agent.log import logger
 
 
@@ -684,3 +684,61 @@ def rm_default_system(messages: List[Message]) -> List[Message]:
             raise TypeError
     else:
         return messages
+
+IMAGE_REGEX = re.compile(r'!\[(.*?)\]\(data:image/[^;]+;base64,[a-zA-Z0-9+/=]+\)')
+
+
+def get_message_stats(msg: Union[Message, dict]) -> dict:
+    """Return tokens and words for a message with consistency.
+    Uses logic aligned with BaseChatModel._truncate_input_messages_roughly.
+    """
+    from qwen_agent.utils.tokenization_qwen import count_tokens as qwen_count
+    
+    if isinstance(msg, dict):
+        role = msg.get(ROLE, '')
+        function_call = msg.get('function_call')
+        if role == ASSISTANT and function_call:
+            text = f'{function_call}'
+            return {'tokens': qwen_count(text), 'words': len(text.split())}
+        msg_obj = Message(**msg)
+    else:
+        if msg.role == ASSISTANT and msg.function_call:
+            text = f'{msg.function_call}'
+            return {'tokens': qwen_count(text), 'words': len(text.split())}
+        msg_obj = msg
+
+    text = extract_text_from_message(msg_obj, add_upload_info=True)
+    image_tokens = 0
+    def repl(match):
+        nonlocal image_tokens
+        image_tokens += 255
+        return f"[Image: {match.group(1)}]"
+    
+    text_for_tokens = IMAGE_REGEX.sub(repl, text)
+    tokens = qwen_count(text_for_tokens) + image_tokens
+    words = len(text.split())
+    return {'tokens': tokens, 'words': words}
+
+
+def get_history_stats(messages: List[Union[Message, dict]]) -> dict:
+    """Calculate total tokens and words in a message list with caching."""
+    if not messages:
+        return {'tokens': 0, 'words': 0}
+    total_tokens = 0
+    total_words = 0
+    for m in messages:
+        if isinstance(m, dict):
+            if '_tokens' in m and '_words' in m:
+                total_tokens += m['_tokens']
+                total_words += m['_words']
+            else:
+                stats = get_message_stats(m)
+                m['_tokens'] = stats['tokens']
+                m['_words'] = stats['words']
+                total_tokens += stats['tokens']
+                total_words += stats['words']
+        else:
+            stats = get_message_stats(m)
+            total_tokens += stats['tokens']
+            total_words += stats['words']
+    return {'tokens': total_tokens, 'words': total_words}

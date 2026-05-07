@@ -30,7 +30,10 @@ from qwen_agent.tools import (
     doc_parser,
     extract_doc_vocabulary,
     code_interpreter,
+    python_compiler,
 )
+from qwen_agent.tools.custom import SystemInfo
+from qwen_agent.settings import DEFAULT_WORKSPACE
 
 # Register web tools globally
 @register_tool('ddg_search', allow_overwrite=True)
@@ -87,7 +90,7 @@ DEFAULT_TOOLS = {
     'orchestrator': [
         'call_agent', 'dismiss_agent', 'list_agents',
         'compress_context', 'write_file', 'edit_file', 'delete_file', 'copy_file', 'move_file', 'read_file', 'view_image', 'list_dir', 'grep',
-        'ddg_search', 'web_extractor', 'storage', 'retrieval'
+        'ddg_search', 'web_extractor', 'storage', 'retrieval', 'system_info'
     ],
     'coder': [
         'call_agent', 'list_agents',
@@ -114,7 +117,7 @@ DEFAULT_TOOLS = {
 
 # Tools available to ALL agents (shown in UI but disabled by default)
 ALL_BUILTIN_TOOLS = [
-    'image_gen', 'storage', 'retrieval', 'code_interpreter', 'python_executor',
+    'image_gen', 'storage', 'retrieval', 'code_interpreter', 'python_compiler',
     'delete_file', 'shell_cmd', # These are powerful - enable manually
 ]
 
@@ -134,8 +137,9 @@ if __name__ == '__main__':
             # Get default tools for this agent type
             default_tools = DEFAULT_TOOLS.get(agent_name, DEFAULT_TOOLS['writer'])
             
-            # Always add web tools
+            # Always add web tools and system info
             agent.function_map['ddg_search'] = DDGSearch()
+            agent.function_map['system_info'] = SystemInfo(agent_pool=agent_pool)
             
             # Add default built-in tools
             if 'image_gen' in default_tools:
@@ -145,41 +149,42 @@ if __name__ == '__main__':
                     pass
             
             if 'web_extractor' in default_tools:
-                agent.function_map['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': 'workspace'})
+                agent.function_map['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': DEFAULT_WORKSPACE})
             
             if 'storage' in default_tools:
                 agent.function_map['storage'] = storage.Storage()
             
             if 'retrieval' in default_tools:
                 from qwen_agent.tools import retrieval
-                agent.function_map['retrieval'] = retrieval.Retrieval(cfg={'work_dir': 'workspace'})
+                agent.function_map['retrieval'] = retrieval.Retrieval(cfg={'work_dir': DEFAULT_WORKSPACE})
             
             if 'simple_doc_parser' in default_tools:
-                agent.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': 'workspace'})
+                agent.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': DEFAULT_WORKSPACE})
             
             if 'doc_parser' in default_tools:
-                agent.function_map['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': 'workspace'})
+                agent.function_map['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': DEFAULT_WORKSPACE})
             
             if 'extract_doc_vocabulary' in default_tools:
-                agent.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
+                agent.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': DEFAULT_WORKSPACE})
             
             if 'code_interpreter' in default_tools:
                 try:
-                    agent.function_map['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': 'workspace'})
+                    agent.function_map['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': DEFAULT_WORKSPACE})
                 except Exception:
                     pass
             
-            if 'python_executor' in default_tools:
+            if 'python_compiler' in default_tools:
                 try:
-                    agent.function_map['python_executor'] = python_executor.PythonExecutor(cfg={'work_dir': 'workspace'})
+                    agent.function_map['python_compiler'] = python_compiler.PythonCompiler(cfg={'work_dir': DEFAULT_WORKSPACE})
                 except Exception:
                     pass
 
     # Load orchestrator with its default tools
     orchestrator = load_orchestrator_agent(agent_pool, llm_cfg)
 
-    # Add web tools to orchestrator
+    # Add web tools and system info to orchestrator
     orchestrator.function_map['ddg_search'] = DDGSearch()
+    orchestrator.function_map['system_info'] = SystemInfo(agent_pool=agent_pool)
 
     # Add orchestrator's default built-in tools
     default_orch_tools = DEFAULT_TOOLS['orchestrator']
@@ -190,33 +195,33 @@ if __name__ == '__main__':
             pass
 
     if 'web_extractor' in default_orch_tools:
-        orchestrator.function_map['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': 'workspace'})
+        orchestrator.function_map['web_extractor'] = web_extractor.WebExtractor(cfg={'work_dir': DEFAULT_WORKSPACE})
 
     if 'storage' in default_orch_tools:
         orchestrator.function_map['storage'] = storage.Storage()
 
     if 'retrieval' in default_orch_tools:
         from qwen_agent.tools import retrieval
-        orchestrator.function_map['retrieval'] = retrieval.Retrieval(cfg={'work_dir': 'workspace'})
+        orchestrator.function_map['retrieval'] = retrieval.Retrieval(cfg={'work_dir': DEFAULT_WORKSPACE})
 
     if 'simple_doc_parser' in default_orch_tools:
-        orchestrator.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': 'workspace'})
+        orchestrator.function_map['simple_doc_parser'] = simple_doc_parser.SimpleDocParser(cfg={'work_dir': DEFAULT_WORKSPACE})
 
     if 'doc_parser' in default_orch_tools:
-        orchestrator.function_map['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': 'workspace'})
+        orchestrator.function_map['doc_parser'] = doc_parser.DocParser(cfg={'work_dir': DEFAULT_WORKSPACE})
 
     if 'extract_doc_vocabulary' in default_orch_tools:
-        orchestrator.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': 'workspace'})
+        orchestrator.function_map['extract_doc_vocabulary'] = extract_doc_vocabulary.ExtractDocVocabulary(cfg={'work_dir': DEFAULT_WORKSPACE})
 
     if 'code_interpreter' in default_orch_tools:
         try:
-            orchestrator.function_map['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': 'workspace'})
+            orchestrator.function_map['code_interpreter'] = code_interpreter.CodeInterpreter(cfg={'work_dir': DEFAULT_WORKSPACE})
         except Exception:
             pass
 
-    if 'python_executor' in default_orch_tools:
+    if 'python_compiler' in default_orch_tools:
         try:
-            orchestrator.function_map['python_executor'] = python_executor.PythonExecutor(cfg={'work_dir': 'workspace'})
+            orchestrator.function_map['python_compiler'] = python_compiler.PythonCompiler(cfg={'work_dir': DEFAULT_WORKSPACE})
         except Exception:
             pass
 

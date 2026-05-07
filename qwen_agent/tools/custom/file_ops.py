@@ -1,6 +1,6 @@
-import json
 from pathlib import Path
 from qwen_agent.tools.base import BaseTool
+from qwen_agent.settings import DEFAULT_WORKSPACE
 
 
 class ReadFile(BaseTool):
@@ -91,7 +91,9 @@ class ReadFile(BaseTool):
         if hasattr(self, 'agent_pool') and self.agent_pool:
             base_dir = self.agent_pool.operation_manager.base_dir
         else:
-            base_dir = Path('workspace')
+            # Fallback if no agent_pool, but try to use the new default
+            base_dir = Path(DEFAULT_WORKSPACE)
+            base_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             resolved = (base_dir / path).resolve()
@@ -195,7 +197,9 @@ class ViewImage(BaseTool):
         if hasattr(self, 'agent_pool') and self.agent_pool:
             base_dir = self.agent_pool.operation_manager.base_dir
         else:
-            base_dir = Path('workspace')
+            # Fallback if no agent_pool, but try to use the new default
+            base_dir = Path(DEFAULT_WORKSPACE)
+            base_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             resolved = (base_dir / path).resolve()
