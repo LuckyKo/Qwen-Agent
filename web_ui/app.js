@@ -336,6 +336,10 @@ function saveSettings() {
   if (autoSecurityToggle) s['auto-security'] = autoSecurityToggle.checked;
 
   localStorage.setItem('qwen-settings', JSON.stringify(s));
+  
+  // Re-render to apply setting changes immediately (like context bar max value)
+  renderMessages();
+  renderSubAgents();
 }
 
 function loadSettings() {
@@ -1407,7 +1411,7 @@ function renderSubAgents() {
       tabBtn.onclick = () => switchMainTab(tabId);
       mainTabBar.appendChild(tabBtn);
     }
-    tabBtn.innerHTML = `${isActive ? '<span class="sub-tab-pulse"></span>' : '<span class="main-tab-icon">🤖</span>'} ${escapeHtml(name)} <span class="activity-dot"></span>`;
+    tabBtn.innerHTML = `${isActive ? '<span class="sub-tab-pulse"></span>' : '<span class="main-tab-icon">🤖</span>'} ${escapeHtml(name)}`;
 
     // Highlight the active sub-agent's tab
     if (isActive) {
@@ -1812,11 +1816,13 @@ function updateControls() {
   if (state.generating) {
     sendBtn.classList.add('inject-mode');
     sendBtn.title = 'Inject message into active agent (Enter)';
+    if (mainTabChat) mainTabChat.innerHTML = '<span class="sub-tab-pulse"></span> Chat';
     resetBtn.disabled = true;
     document.body.classList.add('is-generating');
   } else {
     sendBtn.classList.remove('inject-mode');
     sendBtn.title = 'Send (Enter)';
+    if (mainTabChat) mainTabChat.innerHTML = '<span class="main-tab-icon">💬</span> Chat';
     resetBtn.disabled = false;
     document.body.classList.remove('is-generating');
   }
@@ -1874,7 +1880,8 @@ function updateContextBar(barEl, msgs, overrideTokens, overrideMax) {
   if (!barEl) return;
 
   const tokens = overrideTokens || 0;
-  const maxContext = overrideMax || (settingMaxContext ? parseInt(settingMaxContext.value) || 32768 : 32768);
+  // Prioritize the UI setting for max context if it's available
+  const maxContext = (settingMaxContext && settingMaxContext.value) ? parseInt(settingMaxContext.value) : (overrideMax || 32768);
 
   const pct = Math.min(100, Math.max(0, (tokens / maxContext) * 100));
   barEl.style.width = pct + '%';

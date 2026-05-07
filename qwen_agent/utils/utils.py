@@ -360,12 +360,25 @@ def json_loads(text: str) -> dict:
         repaired = repair_invalid_json(original_text)
         return json5.loads(repaired)
     except Exception:
-        # 4. Try repairing the STRIPPED text as a last resort
-        try:
-            repaired = repair_invalid_json(text)
+        pass
+
+    # 4. Try extracting just the JSON object between the first { and last }
+    try:
+        start_idx = text.find('{')
+        end_idx = text.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            json_str = text[start_idx:end_idx+1]
+            repaired = repair_invalid_json(json_str)
             return json5.loads(repaired)
-        except Exception as e:
-            raise ValueError(f'Parameters must be formatted as a valid JSON! Detail: {str(e)}')
+    except Exception:
+        pass
+
+    # 5. Try repairing the STRIPPED text as a last resort
+    try:
+        repaired = repair_invalid_json(text)
+        return json5.loads(repaired)
+    except Exception as e:
+        raise ValueError(f'Parameters must be formatted as a valid JSON! Detail: {str(e)}')
 
 
 class PydanticJSONEncoder(json.JSONEncoder):

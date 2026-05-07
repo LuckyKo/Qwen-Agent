@@ -229,6 +229,21 @@ class NousFnCallPrompt(BaseFnCallPrompt):
                     new_content.append(ContentItem(text='</think>'.join(_item_text[:-1]) + '</think>'))
                     item_text = _item_text[-1]
 
+                # Normalize Gemma format: <|tool_call>call:fn_name{args}<tool_call|>
+                def gemma_repl(match):
+                    fn_name = match.group(1)
+                    args_str = match.group(2)
+                    if not args_str.strip():
+                        args_str = "{}"
+                    return f'<tool_call>\n{{"name": "{fn_name}", "arguments": {args_str}}}\n</tool_call>'
+                item_text = re.sub(r'<\|tool_call>call:([a-zA-Z0-9_]+)(.*?)<tool_call\|>', gemma_repl, item_text, flags=re.DOTALL)
+                
+                # Handle incomplete Gemma tool calls during streaming
+                if '<|tool_call>call:' in item_text and '<tool_call|>' not in item_text:
+                    match = re.search(r'<\|tool_call>call:([a-zA-Z0-9_]+)(.*)$', item_text, flags=re.DOTALL)
+                    if match:
+                        item_text = item_text[:match.start()] + f'<tool_call>\n{{"name": "{match.group(1)}", "arguments": {match.group(2)}'
+
                 i = item_text.find('<tool_call>')
                 # If no function call:
                 if i < 0:

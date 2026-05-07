@@ -92,11 +92,22 @@ class SystemInfo(BaseTool):
             tools_str = f"Available Tools: {', '.join(all_tools)}\n"
             tools_str += f"Enabled Tools: {', '.join(active_tools)}\n"
         
+        # Resolve Model and API base
+        model = "Unknown"
+        api_base = "Unknown"
+        if agent_obj and hasattr(agent_obj, 'llm') and agent_obj.llm:
+            model = getattr(agent_obj.llm, 'model', "Unknown")
+            if hasattr(agent_obj.llm, 'cfg'):
+                cfg = agent_obj.llm.cfg
+                api_base = cfg.get('api_base') or cfg.get('base_url') or cfg.get('model_server') or "Unknown"
+
         info = (
             f"--- System Information ---\n"
             f"OS: {os_info}\n"
             f"Current Time: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Python Version: {py_version}\n"
+            f"API Endpoint: {api_base}\n"
+            f"Model Used: {model}\n"
             f"Default Agent Workspace: {DEFAULT_WORKSPACE}\n"
             f"Additional Working Directories: {cwd}\n"
             # f"Directory Contents: [{cwd_str}]\n"
