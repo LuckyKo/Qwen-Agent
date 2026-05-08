@@ -493,6 +493,30 @@ body {
   line-height: 1;
 }
 
+.close-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-muted);
+  transition: all 150ms ease;
+  margin-left: 6px;
+  margin-right: -4px;
+}
+
+.close-tab:hover {
+  background: var(--danger-dim);
+  color: var(--text-primary);
+}
+
+.main-tab#mainTabChat .close-tab {
+  display: none;
+}
+
 /* Pulsing dot for active sub-agents */
 .sub-tab-pulse {
   display: inline-block;

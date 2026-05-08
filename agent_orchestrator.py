@@ -37,6 +37,13 @@ from qwen_agent.utils.utils import (
 
 from agent_pool import AgentPool
 
+class LoopDetectedError(Exception):
+    """Raised when a repetitive loop is detected in agent turns."""
+    def __init__(self, reason, agent_name=None):
+        self.reason = reason
+        self.agent_name = agent_name
+        super().__init__(f"Loop detected for {agent_name or 'agent'}: {reason}")
+
 def detect_loop(messages: List[Union[dict, Message]]) -> Optional[str]:
     """
     Detect if the agent is stuck in a loop.
@@ -556,8 +563,8 @@ class OrchestratorAgent(Assistant):
             logger_inst.update_history(messages)
         elif not kwargs.get('agent_instance_name'):
             # Only log the last message for the main orchestrator session.
-            # Sub-agents are already logged by _stream_sub_agent_call to avoid duplicates.
-            logger_inst.log_message(messages[-1])
+            # Use update_history to avoid duplicates if api_server.py already logged it during a retry.
+            logger_inst.update_history([messages[-1]])
 
         # --- Check for manual commands ---
         last_msg = messages[-1] if messages else None
@@ -677,12 +684,7 @@ class OrchestratorAgent(Assistant):
             loop_reason = detect_loop(messages)
             if loop_reason:
                 logger.warning(f"Loop detected for {self.name}: {loop_reason}")
-                error_msg = Message(role=ASSISTANT, content=f"\n\n[LOOP DETECTED: {loop_reason}. Halting to prevent token waste. Please review your last few turns and change your strategy.]")
-                response.append(error_msg)
-                messages.append(error_msg)
-                logger_inst.log_message(error_msg)
-                yield response
-                break
+                raise LoopDetectedError(loop_reason, agent_name=self.name)
 
             active_functions = self._get_active_functions()
             
@@ -1209,11 +1211,7 @@ class OrchestratorAgent(Assistant):
                 loop_reason = detect_loop(resp)
                 if loop_reason:
                     logger.warning(f"Loop detected for sub-agent {instance_name}: {loop_reason}")
-                    # Force termination of the sub-agent run
-                    final_resp = resp + [Message(role=ASSISTANT, content=f"\n\n[LOOP DETECTED: {loop_reason}. Sub-agent execution halted.]")]
-                    state['messages'] = list(conv) + list(final_resp)
-                    yield current_response
-                    break
+                    raise LoopDetectedError(loop_reason, agent_name=instance_name)
                     
                 final_resp = resp
 
@@ -1257,10 +1255,17 @@ class OrchestratorAgent(Assistant):
             self.agent_pool.sub_agent_state[instance_name] = state
             
             # Remove from active stack (pop the most recent occurrence)
+            removed = False
             for i in range(len(self.agent_pool.active_stack) - 1, -1, -1):
                 if self.agent_pool.active_stack[i] == instance_name:
                     self.agent_pool.active_stack.pop(i)
+                    removed = True
                     break
+            
+            # If the instance was marked for termination (dismissed from UI), clear it now that the loop is done
+            if removed and instance_name in self.agent_pool.terminated_instances:
+                self.agent_pool.clear_conversation(instance_name)
+                self.agent_pool.terminated_instances.discard(instance_name)
 
 
 

@@ -70,9 +70,18 @@ class AgentPool:
         self._discover_agents()
     
     def terminate_instance(self, instance_name: str):
-        """Mark an instance for immediate termination and stop the execution loop."""
+        """Mark an instance for immediate termination. Only triggers global stop if the instance is currently active."""
         self.terminated_instances.add(instance_name)
-        self.stopped = True
+        if instance_name in self.active_stack:
+            self.stopped = True
+
+    def dismiss_instance(self, instance_name: str):
+        """Remove an instance from the pool. If it's active, it will be stopped and cleared upon completion."""
+        if instance_name in self.active_stack:
+            self.terminated_instances.add(instance_name)
+            self.stopped = True
+        else:
+            self.clear_conversation(instance_name)
 
     def capture_snapshots(self) -> Dict[str, int]:
         """Capture the current history lengths of all active sub-agent instances."""
@@ -290,6 +299,7 @@ rules:
         self.sub_agent_state.clear()
         self.active_stack.clear()
         self.last_tool_args.clear()
+        self.terminated_instances.clear()
         logger.info("AgentPool reset — all instances and loggers cleared.")
     
     def load_session_from_log(self, log_input: str, target_instance: Optional[str] = None) -> str:

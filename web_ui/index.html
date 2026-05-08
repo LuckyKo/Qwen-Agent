@@ -70,14 +70,15 @@
 
           <div class="sidebar-section sidebar-actions">
             <button id="resetBtn" class="btn btn-danger" title="Reset Chat">🗑️ Reset</button>
-            <button id="retryBtn" class="btn btn-secondary" title="Retry Last">🔄 Retry</button>
+            <button id="sidebarRetryBtn" class="btn btn-secondary" title="Retry Last">🔄 Retry</button>
           </div>
 
           <div class="sidebar-divider"></div>
 
           <div class="sidebar-section">
             <label class="sidebar-label">Work Access Folders</label>
-            <textarea id="workAccessFolders" class="sidebar-input" rows="2" placeholder="C:\path\one&#10;/path/two" style="resize: vertical;"></textarea>
+            <textarea id="workAccessFolders" class="sidebar-input" rows="2" placeholder="C:\path\one&#10;/path/two"
+              style="resize: vertical;"></textarea>
           </div>
 
           <div class="sidebar-divider"></div>
@@ -118,7 +119,9 @@
         <div class="main-tab-panels">
           <!-- Chat panel (default) -->
           <div class="main-tab-panel active" id="panelChat">
-            <div class="context-bar" title="Context Usage"><div class="context-bar-fill" id="chatContextFill" style="width: 0%;"></div></div>
+            <div class="context-bar" title="Context Usage">
+              <div class="context-bar-fill" id="chatContextFill" style="width: 0%;"></div>
+            </div>
             <div class="messages" id="messages"></div>
 
 
@@ -141,16 +144,21 @@
                 </button>
               </div>
               <div class="input-controls">
-                <label class="setting-field toggle-field" style="margin: 0; padding: 0 8px; font-size: 12px; cursor: pointer;" title="Send automatic replies when agent stops">
+                <label class="setting-field toggle-field"
+                  style="margin: 0; padding: 0 8px; font-size: 12px; cursor: pointer;"
+                  title="Send automatic replies when agent stops">
                   <span>AFK</span>
                   <input type="checkbox" id="afkToggle" />
                 </label>
-                <label class="setting-field toggle-field" style="margin: 0; padding: 0 8px; font-size: 12px; cursor: pointer; color: #ffc107;" title="Automatically ask Security Expert to check and approve commands">
+                <label class="setting-field toggle-field"
+                  style="margin: 0; padding: 0 8px; font-size: 12px; cursor: pointer; color: #ffc107;"
+                  title="Automatically ask Security Expert to check and approve commands">
                   <span>🛡️ Auto-Ask</span>
                   <input type="checkbox" id="autoSecurityToggle" />
                 </label>
-                <button id="continueBtn" class="btn btn-secondary" title="Continue generation (Ctrl+Shift+Enter)">⏩ Continue</button>
-                <button id="retryBtn" class="btn btn-secondary" title="Retry last turn (Ctrl+Shift+R)">🔄 Retry</button>
+                <button id="continueBtn" class="btn btn-secondary" title="Continue generation (Ctrl+Shift+Enter)">⏩
+                  Continue</button>
+                <button id="mainRetryBtn" class="btn btn-secondary" title="Retry last turn (Ctrl+Shift+R)">🔄 Retry</button>
                 <button id="stopBtn" class="btn btn-stop" style="display:none;">⏹ Stop</button>
                 <span class="status-text" id="statusText"></span>
               </div>
@@ -182,142 +190,146 @@
           <!-- General Settings Tab -->
           <div class="settings-tab-panel active" id="settings-general">
             <div class="settings-content">
-            <!-- Connection -->
-            <div class="settings-section">
-              <h3 class="settings-section-title">Connection</h3>
-              <div class="settings-section-body">
-                <label class="setting-field">
-                  <span>API Endpoint</span>
-                  <input type="text" id="setting-endpoint" placeholder="http://localhost:5001/v1" />
-                </label>
-                <label class="setting-field">
-                  <span>API Key <em>(optional)</em></span>
-                  <input type="password" id="setting-api-key" placeholder="sk-..." />
-                </label>
-                <label class="setting-field">
-                  <span>Model</span>
-                  <input type="text" id="setting-model" placeholder="Model name or ID" />
-                </label>
+              <!-- Connection -->
+              <div class="settings-section">
+                <h3 class="settings-section-title">Connection</h3>
+                <div class="settings-section-body">
+                  <label class="setting-field">
+                    <span>API Endpoint</span>
+                    <input type="text" id="setting-endpoint" placeholder="http://localhost:5001/v1" />
+                  </label>
+                  <label class="setting-field">
+                    <span>API Key <em>(optional)</em></span>
+                    <input type="password" id="setting-api-key" placeholder="sk-..." />
+                  </label>
+                  <label class="setting-field">
+                    <span>Model</span>
+                    <input type="text" id="setting-model" placeholder="Model name or ID" />
+                  </label>
+                </div>
               </div>
-            </div>
 
-            <!-- Sampling Parameters -->
-            <div class="settings-section">
-              <h3 class="settings-section-title">Sampling</h3>
-              <div class="settings-section-body">
-                <label class="setting-field">
-                  <span>Temperature <output id="val-temperature">0.8</output></span>
-                  <input type="range" id="setting-temperature" min="0" max="2" step="0.05" value="0.8" />
-                </label>
-                <label class="setting-field">
-                  <span>Top-P <output id="val-top-p">0.95</output></span>
-                  <input type="range" id="setting-top-p" min="0" max="1" step="0.01" value="0.95" />
-                </label>
-                <label class="setting-field">
-                  <span>Top-K <output id="val-top-k">40</output></span>
-                  <input type="range" id="setting-top-k" min="0" max="200" step="1" value="40" />
-                </label>
-                <label class="setting-field">
-                  <span>Min-P <output id="val-min-p">0.05</output></span>
-                  <input type="range" id="setting-min-p" min="0" max="1" step="0.01" value="0.05" />
-                </label>
-                <label class="setting-field">
-                  <span>Repeat Penalty <output id="val-repeat-penalty">1.05</output></span>
-                  <input type="range" id="setting-repeat-penalty" min="1" max="2" step="0.01" value="1.05" />
-                </label>
-                <label class="setting-field">
-                  <span>Presence Penalty <output id="val-presence-penalty">0.0</output></span>
-                  <input type="range" id="setting-presence-penalty" min="-2" max="2" step="0.1" value="0.0" />
-                </label>
-                <label class="setting-field">
-                  <span>Frequency Penalty <output id="val-frequency-penalty">0.0</output></span>
-                  <input type="range" id="setting-frequency-penalty" min="-2" max="2" step="0.1" value="0.0" />
-                </label>
-                <label class="setting-field">
-                  <span>Max Tokens</span>
-                  <input type="number" id="setting-max-tokens" min="1" max="32768" value="2048" />
-                </label>
-                <label class="setting-field">
-                  <span>Context Size (Tokens)</span>
-                  <input type="number" id="setting-max-context" min="1024" max="1000000" value="65536" />
-                </label>
+              <!-- Sampling Parameters -->
+              <div class="settings-section">
+                <h3 class="settings-section-title">Sampling</h3>
+                <div class="settings-section-body">
+                  <label class="setting-field">
+                    <span>Temperature <output id="val-temperature">0.8</output></span>
+                    <input type="range" id="setting-temperature" min="0" max="2" step="0.05" value="0.8" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Top-P <output id="val-top-p">0.95</output></span>
+                    <input type="range" id="setting-top-p" min="0" max="1" step="0.01" value="0.95" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Top-K <output id="val-top-k">40</output></span>
+                    <input type="range" id="setting-top-k" min="0" max="200" step="1" value="40" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Min-P <output id="val-min-p">0.05</output></span>
+                    <input type="range" id="setting-min-p" min="0" max="1" step="0.01" value="0.05" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Repeat Penalty <output id="val-repeat-penalty">1.05</output></span>
+                    <input type="range" id="setting-repeat-penalty" min="1" max="2" step="0.01" value="1.05" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Presence Penalty <output id="val-presence-penalty">0.0</output></span>
+                    <input type="range" id="setting-presence-penalty" min="-2" max="2" step="0.1" value="0.0" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Frequency Penalty <output id="val-frequency-penalty">0.0</output></span>
+                    <input type="range" id="setting-frequency-penalty" min="-2" max="2" step="0.1" value="0.0" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Max Tokens</span>
+                    <input type="number" id="setting-max-tokens" min="1" max="32768" value="2048" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Context Size (Tokens)</span>
+                    <input type="number" id="setting-max-context" min="1024" max="1000000" value="65536" />
+                  </label>
+                </div>
               </div>
-            </div>
 
-            <!-- Vision Support -->
-            <div class="settings-section">
-              <h3 class="settings-section-title">Vision</h3>
-              <div class="settings-section-body">
-                <label class="setting-field toggle-field">
-                  <span>Vision Enabled</span>
-                  <input type="checkbox" id="setting-vision-enabled" />
-                </label>
-                <label class="setting-field">
-                  <span>Image Detail</span>
-                  <select id="setting-image-detail">
-                    <option value="auto">Auto</option>
-                    <option value="low">Low</option>
-                    <option value="high">High</option>
-                  </select>
-                </label>
-                <label class="setting-field">
-                  <span>Max Image Size (px)</span>
-                  <input type="number" id="setting-max-image-size" min="256" max="4096" value="1024" />
-                </label>
+              <!-- Vision Support -->
+              <div class="settings-section">
+                <h3 class="settings-section-title">Vision</h3>
+                <div class="settings-section-body">
+                  <label class="setting-field toggle-field">
+                    <span>Vision Enabled</span>
+                    <input type="checkbox" id="setting-vision-enabled" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Image Detail</span>
+                    <select id="setting-image-detail">
+                      <option value="auto">Auto</option>
+                      <option value="low">Low</option>
+                      <option value="high">High</option>
+                    </select>
+                  </label>
+                  <label class="setting-field">
+                    <span>Max Image Size (px)</span>
+                    <input type="number" id="setting-max-image-size" min="256" max="4096" value="1024" />
+                  </label>
+                </div>
               </div>
-            </div>
 
-            <!-- Model Context Protocol -->
-            <div class="settings-section">
-              <h3 class="settings-section-title">MCP Extensions</h3>
-              <div class="settings-section-body">
-                <label class="setting-field" style="flex-direction: column; align-items: stretch; gap: 8px;">
-                  <span>MCP Servers (JSON)</span>
-                  <textarea id="setting-mcp-servers" placeholder='{&#10;  "sqlite": {&#10;    "command": "npx",&#10;    "args": ["-y", "@modelcontextprotocol/server-sqlite", "db.sqlite"]&#10;  }&#10;}' rows="5" style="width: 100%; font-family: monospace; padding: 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical;"></textarea>
-                </label>
-                <button id="apply-mcp-btn" class="secondary-btn" style="width: 100%; margin-top: 8px;">Apply MCP Config</button>
+              <!-- Model Context Protocol -->
+              <div class="settings-section">
+                <h3 class="settings-section-title">MCP Extensions</h3>
+                <div class="settings-section-body">
+                  <label class="setting-field" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                    <span>MCP Servers (JSON)</span>
+                    <textarea id="setting-mcp-servers"
+                      placeholder='{&#10;  "sqlite": {&#10;    "command": "npx",&#10;    "args": ["-y", "@modelcontextprotocol/server-sqlite", "db.sqlite"]&#10;  }&#10;}'
+                      rows="5"
+                      style="width: 100%; font-family: monospace; padding: 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical;"></textarea>
+                  </label>
+                  <button id="apply-mcp-btn" class="secondary-btn" style="width: 100%; margin-top: 8px;">Apply MCP
+                    Config</button>
+                </div>
               </div>
-            </div>
 
-            <!-- Appearance & Audio -->
-            <div class="settings-section">
-              <h3 class="settings-section-title">Appearance & Audio</h3>
-              <div class="settings-section-body">
-                <label class="setting-field toggle-field">
-                  <span>Show Line Numbers</span>
-                  <input type="checkbox" id="setting-lines-enabled" checked />
-                </label>
-                <label class="setting-field toggle-field">
-                  <span>Truncate Tool Output</span>
-                  <input type="checkbox" id="setting-truncate-tools" checked />
-                </label>
-                <label class="setting-field toggle-field">
-                  <span>Sound: User Intervention</span>
-                  <input type="checkbox" id="setting-sound-intervention" checked />
-                </label>
-                <label class="setting-field toggle-field">
-                  <span>Sound: Task Completed</span>
-                  <input type="checkbox" id="setting-sound-completed" checked />
-                </label>
-                <label class="setting-field">
-                  <span>User Message Color</span>
-                  <input type="color" id="setting-user-color" value="#1a3a5c" />
-                </label>
-                <label class="setting-field">
-                  <span>Assistant Message Color</span>
-                  <input type="color" id="setting-assistant-color" value="#1c2333" />
-                </label>
-                <label class="setting-field">
-                  <span>Raw Edit Background Color</span>
-                  <input type="color" id="setting-raw-edit-color" value="#111418" />
-                </label>
-                <label class="setting-field">
-                  <span>Font Size <output id="val-font-size">14</output>px</span>
-                  <input type="range" id="setting-font-size" min="12" max="24" step="1" value="14" />
-                </label>
+              <!-- Appearance & Audio -->
+              <div class="settings-section">
+                <h3 class="settings-section-title">Appearance & Audio</h3>
+                <div class="settings-section-body">
+                  <label class="setting-field toggle-field">
+                    <span>Show Line Numbers</span>
+                    <input type="checkbox" id="setting-lines-enabled" checked />
+                  </label>
+                  <label class="setting-field toggle-field">
+                    <span>Truncate Tool Output</span>
+                    <input type="checkbox" id="setting-truncate-tools" checked />
+                  </label>
+                  <label class="setting-field toggle-field">
+                    <span>Sound: User Intervention</span>
+                    <input type="checkbox" id="setting-sound-intervention" checked />
+                  </label>
+                  <label class="setting-field toggle-field">
+                    <span>Sound: Task Completed</span>
+                    <input type="checkbox" id="setting-sound-completed" checked />
+                  </label>
+                  <label class="setting-field">
+                    <span>User Message Color</span>
+                    <input type="color" id="setting-user-color" value="#1a3a5c" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Assistant Message Color</span>
+                    <input type="color" id="setting-assistant-color" value="#1c2333" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Raw Edit Background Color</span>
+                    <input type="color" id="setting-raw-edit-color" value="#111418" />
+                  </label>
+                  <label class="setting-field">
+                    <span>Font Size <output id="val-font-size">14</output>px</span>
+                    <input type="range" id="setting-font-size" min="12" max="24" step="1" value="14" />
+                  </label>
+                </div>
               </div>
             </div>
-          </div>
           </div>
 
           <!-- Agent & Tools Tab -->
@@ -337,7 +349,8 @@
                 <div class="settings-section-body">
                   <label class="setting-field" style="flex-direction: column; align-items: stretch; gap: 4px;">
                     <span>AFK Auto-Reply Message</span>
-                    <textarea id="setting-afk-message" rows="3" style="width: 100%; font-family: inherit; padding: 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical;">User is AFK, continue working on given task or polish/verify your work if there are things to improve...</textarea>
+                    <textarea id="setting-afk-message" rows="3"
+                      style="width: 100%; font-family: inherit; padding: 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical;">User is AFK, continue working on given task or polish/verify your work if there are things to improve...</textarea>
                   </label>
                   <label class="setting-field">
                     <span>Max Turns per Run</span>
@@ -350,6 +363,10 @@
                   <label class="setting-field toggle-field">
                     <span>Auto-Rollback on Loop</span>
                     <input type="checkbox" id="setting-auto-rollback" checked />
+                  </label>
+                  <label class="setting-field">
+                    <span>Max Auto-Rollbacks (-1=∞)</span>
+                    <input type="number" id="setting-max-rollbacks" min="-1" max="100" value="3" />
                   </label>
                   <label class="setting-field">
                     <span>Read File Limit (Lines) <output id="val-read-file-limit">1000</output></span>
@@ -395,17 +412,24 @@
                         <option value="chat">Main Orchestrator</option>
                       </select>
                     </label>
-                    <button id="refresh-memory-btn" class="btn btn-secondary" style="padding: 6px; height: 32px; min-width: 32px; display: flex; align-items: center; justify-content: center;" title="Refresh agent list">
+                    <button id="refresh-memory-btn" class="btn btn-secondary"
+                      style="padding: 6px; height: 32px; min-width: 32px; display: flex; align-items: center; justify-content: center;"
+                      title="Refresh agent list">
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                        <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                        <path
+                          d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
                       </svg>
                     </button>
                   </div>
 
-                  <textarea id="setting-summary-text" rows="20" style="width: 100%; font-family: inherit; font-size: 13px; line-height: 1.5; padding: 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical;" placeholder="No active summary. Summaries are created automatically when history becomes too long."></textarea>
-                  <button id="save-summary-btn" class="btn btn-primary" style="width: 100%; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                  <textarea id="setting-summary-text" rows="20"
+                    style="width: 100%; font-family: inherit; font-size: 13px; line-height: 1.5; padding: 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical;"
+                    placeholder="No active summary. Summaries are created automatically when history becomes too long."></textarea>
+                  <button id="save-summary-btn" class="btn btn-primary"
+                    style="width: 100%; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px;">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                      <path d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+                      <path
+                        d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
                     </svg>
                     Update Memory
                   </button>

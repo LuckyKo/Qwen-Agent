@@ -65,7 +65,6 @@ const chatInput = $('#chatInput');
 const sendBtn = $('#sendBtn');
 const continueBtn = $('#continueBtn');
 const stopBtn = $('#stopBtn');
-const retryBtn = $('#retryBtn');
 const resetBtn = $('#resetBtn');
 const agentSelect = $('#agentSelect');
 const sessionNameInput = $('#sessionName');
@@ -648,9 +647,12 @@ function handleServerMessage(data) {
       }
       state.messages.push(...responseMsgs);
 
+      const oldStackStr = (state.activeStack || []).join(',');
       if (data.sub_agents) state.subAgents = data.sub_agents;
       if (data.active_stack) state.activeStack = data.active_stack;
       state.generating = true;
+      const newStackStr = (state.activeStack || []).join(',');
+      const stackChanged = oldStackStr !== newStackStr;
 
       // Update scalar stats (always lightweight — no DOM work)
       if (data.total_tokens !== undefined) state.totalTokens = data.total_tokens;
@@ -676,9 +678,21 @@ function handleServerMessage(data) {
       // updated on every tick above, keeping the activity feed responsive.
       const now = performance.now();
       if (!state.genStats.lastSubAgentRender) state.genStats.lastSubAgentRender = 0;
-      if (now - state.genStats.lastSubAgentRender > 750) {
+      if (stackChanged || now - state.genStats.lastSubAgentRender > 750) {
         renderSubAgents();
         state.genStats.lastSubAgentRender = now;
+        
+        if (stackChanged) {
+          if (state.activeStack.length > 0) {
+            const topAgent = state.activeStack[state.activeStack.length - 1];
+            // Only auto-switch if the sub-agent panel has actually been created
+            if (state.subAgents && state.subAgents[topAgent] && state.activeSubTab !== 'sub-' + topAgent) {
+              switchMainTab('sub-' + topAgent);
+            }
+          } else {
+            switchMainTab('chat');
+          }
+        }
       }
 
       // Throttle gen stats to ~2Hz instead of ~6.5Hz. The token/sec display is
@@ -1417,9 +1431,38 @@ function renderSubAgents() {
       tabBtn.className = 'main-tab';
       tabBtn.dataset.tab = tabId;
       tabBtn.onclick = () => switchMainTab(tabId);
+
+      const iconSpan = document.createElement('span');
+      iconSpan.className = 'tab-icon-container';
+      tabBtn.appendChild(iconSpan);
+
+      const labelSpan = document.createElement('span');
+      labelSpan.className = 'tab-label';
+      tabBtn.appendChild(labelSpan);
+
+      const closeBtn = document.createElement('span');
+      closeBtn.className = 'close-tab';
+      closeBtn.title = 'Terminate Agent';
+      closeBtn.textContent = '\u00d7';
+      closeBtn.onclick = (e) => {
+        e.stopPropagation();
+        send({ type: 'terminate_sub_agent', instance_name: name });
+        switchMainTab('chat');
+      };
+      tabBtn.appendChild(closeBtn);
+
       mainTabBar.appendChild(tabBtn);
     }
-    tabBtn.innerHTML = `${isActive ? '<span class="sub-tab-pulse"></span>' : '<span class="main-tab-icon">🤖</span>'} ${escapeHtml(name)}`;
+
+    // Update tab content safely (preserves handlers on closeBtn)
+    const iconSpan = tabBtn.querySelector('.tab-icon-container');
+    if (iconSpan) {
+      iconSpan.innerHTML = isActive ? '<span class="sub-tab-pulse"></span>' : '<span class="main-tab-icon">🤖</span>';
+    }
+    const labelSpan = tabBtn.querySelector('.tab-label');
+    if (labelSpan) {
+      labelSpan.textContent = ` ${name}`;
+    }
 
     // Highlight the active sub-agent's tab
     if (isActive) {
@@ -1539,11 +1582,9 @@ function renderSubAgentPanel(panel, agentData, name) {
 
   const terminateBtn = activityBar.querySelector('.terminate-btn');
   terminateBtn.onclick = () => {
-    if (confirm(`Terminate agent "${name}" and return focus?`)) {
-      send({ type: 'terminate_sub_agent', instance_name: name });
-      // Return focus to main chat tab
-      switchTab('chat');
-    }
+    send({ type: 'terminate_sub_agent', instance_name: name });
+    // Return focus to main chat tab
+    switchMainTab('chat');
   };
 
   // 3. Ensure input area is present and correctly ordered
@@ -1613,7 +1654,15 @@ function renderSubAgentPanel(panel, agentData, name) {
   const wasAtBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 50;
 
   // 4. Only re-render messages if content changed
-  const contentKey = msgs.length + ':' + (lastMsg ? (lastMsg.content || '').length : 0) + ':' + (lastMsg ? (lastMsg.reasoning_content || '').length : 0);
+  const lastMsgTextLen = (() => {
+    if (!lastMsg) return 0;
+    if (Array.isArray(lastMsg.content)) {
+      return lastMsg.content.reduce((sum, item) => sum + (item.text ? String(item.text).length : 0), 0);
+    }
+    return String(lastMsg.content || '').length;
+  })();
+  const funcCallLen = (lastMsg && lastMsg.function_call && lastMsg.function_call.arguments) ? String(lastMsg.function_call.arguments).length : 0;
+  const contentKey = msgs.length + ':' + lastMsgTextLen + ':' + (lastMsg ? String(lastMsg.reasoning_content || '').length : 0) + ':' + funcCallLen;
   if (panel.dataset.contentKey === contentKey) {
     if (wasAtBottom) scrollContainer.scrollTop = scrollContainer.scrollHeight;
     return;
@@ -1706,11 +1755,18 @@ function switchMainTab(tabId) {
   // Update panels
   mainTabPanels.querySelectorAll('.main-tab-panel').forEach(p => p.classList.remove('active'));
   if (tabId === 'chat') {
-    document.getElementById('panelChat').classList.add('active');
+    const chatPanel = document.getElementById('panelChat');
+    chatPanel.classList.add('active');
+    const scroll = chatPanel.querySelector('.messages-scroll');
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
   } else {
     const name = tabId.substring(4); // strip 'sub-'
     const panel = document.getElementById('panelSub-' + name);
-    if (panel) panel.classList.add('active');
+    if (panel) {
+      panel.classList.add('active');
+      const scroll = panel.querySelector('.messages-scroll');
+      if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    }
   }
   
   state.activeSubTab = tabId;
@@ -1848,7 +1904,11 @@ function updateControls() {
   stopBtn.style.display = state.generating ? 'inline-flex' : 'none';
   sendBtn.disabled = !state.connected;
   continueBtn.disabled = state.generating || state.messages.length === 0;
-  retryBtn.disabled = state.generating || state.messages.length === 0;
+  const sidebarRB = document.getElementById('sidebarRetryBtn');
+  const mainRB = document.getElementById('mainRetryBtn');
+  const retryDisabled = state.generating || state.messages.length === 0;
+  if (sidebarRB) sidebarRB.disabled = retryDisabled;
+  if (mainRB) mainRB.disabled = retryDisabled;
 
   statusText.textContent = state.generating ? 'Generating...' : '';
   chatInput.placeholder = state.generating
@@ -2205,15 +2265,22 @@ chatInput.addEventListener('keydown', (e) => {
   } else if (e.key === 'Enter' && e.shiftKey && e.ctrlKey) {
     e.preventDefault();
     continueMessage();
+  } else if (e.key === 'R' && e.shiftKey && e.ctrlKey) {
+    e.preventDefault();
+    onRetryClick();
   }
 });
 
 sendBtn.addEventListener('click', sendMessage);
 stopBtn.addEventListener('click', () => send({ type: 'stop' }));
-retryBtn.addEventListener('click', () => {
+const onRetryClick = () => {
   lastRenderedCount = Infinity;
   retryGeneration();
-});
+};
+const sidebarRetryBtn = document.getElementById('sidebarRetryBtn');
+const mainRetryBtn = document.getElementById('mainRetryBtn');
+if (sidebarRetryBtn) sidebarRetryBtn.addEventListener('click', onRetryClick);
+if (mainRetryBtn) mainRetryBtn.addEventListener('click', onRetryClick);
 resetBtn.addEventListener('click', () => {
   if (confirm('Reset the entire conversation?')) {
     lastRenderedCount = Infinity;
@@ -2251,6 +2318,7 @@ function getGenerateCfg() {
   if ($('#setting-max-turns')) cfg.max_turns = parseInt($('#setting-max-turns').value) || 50;
   if ($('#setting-auto-continue')) cfg.auto_continue = $('#setting-auto-continue').checked;
   if ($('#setting-auto-rollback')) cfg.auto_rollback_on_loop = $('#setting-auto-rollback').checked;
+  if ($('#setting-max-rollbacks')) cfg.max_auto_rollbacks = parseInt($('#setting-max-rollbacks').value);
   if ($('#setting-read-file-limit')) cfg.read_file_limit = parseInt($('#setting-read-file-limit').value) || 1000;
   if ($('#setting-grep-char-limit')) cfg.grep_char_limit = parseInt($('#setting-grep-char-limit').value);
   if ($('#setting-shell-char-limit')) cfg.shell_char_limit = parseInt($('#setting-shell-char-limit').value);

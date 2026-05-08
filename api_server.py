@@ -546,6 +546,15 @@ def create_app(agents, agent_pool, config=None):
             mcp_servers = ui_cfg.pop('mcpServers', None)
             disabled_tools = ui_cfg.pop('disabled_tools', None)
             work_access_folders = ui_cfg.pop('work_access_folders', None)
+
+            # Keys that should not be passed to the underlying LLM chat API
+            NON_LLM_KEYS = (
+                'max_auto_rollbacks', 'auto_rollback_on_loop', 'auto_continue', 
+                'max_turns', 'mcpServers', 'work_access_folders', 'seed',
+                'read_file_limit', 'grep_char_limit', 'shell_char_limit', 'code_char_limit',
+                'disabled_tools'
+            )
+
             if work_access_folders is not None and agent_pool and hasattr(agent_pool, 'operation_manager') and agent_pool.operation_manager:
                 agent_pool.operation_manager.set_extra_work_folders(work_access_folders)
 
@@ -554,10 +563,10 @@ def create_app(agents, agent_pool, config=None):
             if has_llm:
                 old_cfg = copy.deepcopy(agent_runner.llm.generate_cfg)
                 agent_runner.llm.generate_cfg.pop('mcpServers', None)
-                pure_llm_cfg = copy.deepcopy(ui_cfg)
-                agent_max_turns = pure_llm_cfg.get('max_turns')
-                agent_auto_continue = pure_llm_cfg.get('auto_continue')
-                read_file_limit = pure_llm_cfg.get('read_file_limit')
+                pure_llm_cfg = {k: v for k, v in ui_cfg.items() if k not in NON_LLM_KEYS}
+                agent_max_turns = ui_cfg.get('max_turns')
+                agent_auto_continue = ui_cfg.get('auto_continue')
+                read_file_limit = ui_cfg.get('read_file_limit')
 
                 agent_runner.llm.generate_cfg.update(pure_llm_cfg)
                 if disabled_tools is not None:
@@ -583,7 +592,12 @@ def create_app(agents, agent_pool, config=None):
 
             # ── Retry Loop for Auto-Rollback ──
             retry_count = 0
-            max_auto_retries = 3
+            max_auto_retries = ui_cfg.get('max_auto_rollbacks', 3)
+            # -1 means infinity
+            if max_auto_retries == -1:
+                max_auto_retries = 999999
+            
+            auto_rollback_enabled = ui_cfg.get('auto_rollback_on_loop', True)
             current_history = history_for_agent # Start with the copy provided
             
             while retry_count <= max_auto_retries:
@@ -605,8 +619,11 @@ def create_app(agents, agent_pool, config=None):
                     # Sliced working set for the LLM
                     working_history = agent_pool.slice_history_for_llm(current_history) if agent_pool else current_history
                     
+                    # LLM safe config: filter out UI-only or Orchestrator-specific keys
+                    llm_safe_cfg = {k: v for k, v in ui_cfg.items() if k not in NON_LLM_KEYS}
+
                     # Run the agent on the working set
-                    for partial in agent_runner.run(working_history, **ui_cfg):
+                    for partial in agent_runner.run(working_history, **llm_safe_cfg):
                         if session['stop_requested'] or session['generation_id'] != gen_id:
                             if agent_pool:
                                 agent_pool.stopped = True
@@ -614,9 +631,15 @@ def create_app(agents, agent_pool, config=None):
 
                         responses = partial
                         now = time.time()
-                        if now - last_send > 0.15:
-                            if tick_num % 5 == 0:
+                        
+                        current_stack = list(get_active_stack())
+                        stack_changed = (current_stack != getattr(agent_pool, '_last_seen_stack', None))
+
+                        if now - last_send > 0.15 or stack_changed:
+                            if tick_num % 5 == 0 or stack_changed:
                                 sub_agents_cache = get_sub_agent_state()
+                                if agent_pool:
+                                    agent_pool._last_seen_stack = current_stack
 
                             # UI expects history count to match current_history
                             delta = build_stream_update(responses, cached_h_stats=cached_h_stats, sub_agents=sub_agents_cache)
@@ -631,7 +654,7 @@ def create_app(agents, agent_pool, config=None):
                             full_history_for_detection = current_history + responses
                             loop_reason = detect_loop(full_history_for_detection)
                             if loop_reason:
-                                if ui_cfg.get('auto_rollback_on_loop') and retry_count < max_auto_retries:
+                                if auto_rollback_enabled and retry_count < max_auto_retries:
                                     logger.warning(f"Loop detected: {loop_reason}. Auto-rollback enabled (Retry {retry_count+1}/{max_auto_retries}).")
                                     
                                     # 1. Rollback sub-agent logs and histories
@@ -676,10 +699,45 @@ def create_app(agents, agent_pool, config=None):
                             last_send = now
                             tick_num += 1
                 except Exception as e:
-                    traceback.print_exc()
-                    asyncio.run_coroutine_threadsafe(
-                        send_queue.put({'type': 'error', 'message': f"Generation error: {str(e)}"}), loop
-                    )
+                    from agent_orchestrator import LoopDetectedError
+                    if isinstance(e, LoopDetectedError):
+                        loop_reason = e.reason
+                        agent_name = e.agent_name
+                        if auto_rollback_enabled and retry_count < max_auto_retries:
+                            logger.warning(f"Loop detected for {agent_name}: {loop_reason}. Auto-rollback enabled (Retry {retry_count+1}/{max_auto_retries}).")
+                            
+                            if agent_pool:
+                                agent_pool.rollback_to_snapshots(pool_snapshots)
+                            if current_history:
+                                current_history.pop()
+                            
+                            loop_hint = f"[SYSTEM]: A repetitive loop was detected for {agent_name} ({loop_reason}). Please try a different approach."
+                            current_history.append({ROLE: USER, CONTENT: loop_hint})
+                            
+                            should_retry = True
+                            session['stop_requested'] = False
+                        else:
+                            logger.warning(f"Loop detected for {agent_name}: {loop_reason}. Stopping generation.")
+                            if agent_pool:
+                                agent_pool.rollback_to_snapshots(pool_snapshots)
+                            if current_history:
+                                current_history.pop()
+                            responses = []
+                            session['stop_requested'] = True
+                            if agent_pool:
+                                agent_pool.stopped = True
+                            
+                            asyncio.run_coroutine_threadsafe(
+                                send_queue.put({
+                                    'type': 'error', 
+                                    'message': f"🔄 {loop_reason} in {agent_name}. The agent has been stopped. History rolled back."
+                                }), loop
+                            )
+                    else:
+                        traceback.print_exc()
+                        asyncio.run_coroutine_threadsafe(
+                            send_queue.put({'type': 'error', 'message': f"Generation error: {str(e)}"}), loop
+                        )
                     break
 
                 if should_retry:
@@ -972,8 +1030,9 @@ def create_app(agents, agent_pool, config=None):
                 elif msg_type == 'terminate_sub_agent':
                     instance_name = data.get('instance_name')
                     if instance_name and agent_pool:
-                        agent_pool.terminate_instance(instance_name)
-                    session['stop_requested'] = True
+                        agent_pool.dismiss_instance(instance_name)
+                    # Force immediate state broadcast to update UI (remove tab)
+                    await broadcast({'type': 'state', **build_state()})
 
                 elif msg_type == 'retry':
                     if session['generating']:
@@ -983,15 +1042,48 @@ def create_app(agents, agent_pool, config=None):
                            and session['history'][-1].get(ROLE) in (ASSISTANT, FUNCTION)):
                         session['history'].pop()
 
-                    if not session['history']:
+                    # Roll back one more (the user message) to allow a clean re-trigger
+                    # and ensure consistency with the last_turn_snapshots.
+                    last_user_msg = None
+                    if session['history'] and session['history'][-1].get(ROLE) == USER:
+                        last_user_msg = session['history'].pop()
+
+                    if not session['history'] and not last_user_msg:
                         _save_session_history()
                         await broadcast({'type': 'state', **build_state()})
                         continue
                     
                     _save_session_history()
                     if agent_pool:
-                        agent_pool.reset() # Reset agent state to ensure fresh run after rollback
+                        # Clear active tools/agent stack since we are retrying from the main input level
+                        agent_pool.active_stack.clear()
+                        agent_pool.last_tool_args.clear()
 
+                        # 1. Rollback sub-agents to the start of the last turn
+                        if session.get('last_turn_snapshots'):
+                            agent_pool.rollback_to_snapshots(session['last_turn_snapshots'])
+                        
+                        # 2. Rollback the main orchestrator log to match the shortened history
+                        # This now points to the state before the user message we just popped.
+                        try:
+                            agent_runner_for_log = get_agent()
+                            main_logger = agent_pool.get_logger(session['session_name'], agent_runner_for_log.__class__.__name__)
+                            main_logger.truncate_to(len(session['history']))
+                        except Exception:
+                            pass
+                    
+                    # Now "send it again": re-append the user message.
+                    # This ensures the agent has the correct input to respond to, 
+                    # but the system state is now cleanly positioned as if the message was just sent.
+                    if last_user_msg:
+                        session['history'].append(last_user_msg)
+                        # Re-log it to keep the persistent log file in sync with history
+                        try:
+                            agent_runner_for_log = get_agent()
+                            main_logger = agent_pool.get_logger(session['session_name'], agent_runner_for_log.__class__.__name__)
+                            main_logger.log_message(last_user_msg)
+                        except Exception:
+                            pass
                     if 'generate_cfg' in data:
                         session['generate_cfg'] = data['generate_cfg']
 
