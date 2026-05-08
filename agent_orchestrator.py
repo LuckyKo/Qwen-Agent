@@ -682,19 +682,53 @@ class OrchestratorAgent(Assistant):
             loop_reason = detect_loop(messages)
             if loop_reason:
                 logger.warning(f"Loop detected for {self.name}: {loop_reason}")
+                try:
+                    if hasattr(self.agent_pool, 'telemetry'):
+                        self.agent_pool.telemetry.record_loop_detected(instance, loop_reason)
+                except Exception:
+                    pass
                 raise LoopDetectedError(loop_reason, agent_name=self.name)
 
             active_functions = self._get_active_functions()
             
             # --- Call LLM and handle streaming ---
+            # Telemetry: estimate input tokens for this call (non-blocking)
+            _llm_first_token_recorded = False
+            try:
+                _llm_input_est = sum(self._count_message_tokens(m) for m in llm_messages)
+                _llm_model = getattr(self.llm, 'model', 'unknown') if hasattr(self, 'llm') else 'unknown'
+                if hasattr(self.agent_pool, 'telemetry'):
+                    self.agent_pool.telemetry.record_llm_call_start(instance, input_tokens_est=_llm_input_est, model=_llm_model)
+            except Exception:
+                pass  # Telemetry must never block agent execution
+
             turn_output: List[Message] = []
             for output in self._call_llm(llm_messages, functions=active_functions, stream=True, extra_generate_cfg=extra_generate_cfg):
                 if self.agent_pool.stopped:
                     logger.info(f"Agent {self.name} stopped during LLM stream.")
                     break
+                # Telemetry: record first token time
+                if not _llm_first_token_recorded and output:
+                    try:
+                        if hasattr(self.agent_pool, 'telemetry'):
+                            self.agent_pool.telemetry.record_llm_first_token(instance)
+                    except Exception:
+                        pass
+                    _llm_first_token_recorded = True
                 turn_output = output
                 yield response + turn_output
             
+            # Telemetry: estimate output tokens and record LLM call end (non-blocking)
+            try:
+                _llm_output_est = sum(
+                    self._count_message_tokens(m) for m in turn_output
+                    if (m.get('role') if isinstance(m, dict) else getattr(m, 'role', '')) == ASSISTANT
+                ) if turn_output else 0
+                if hasattr(self.agent_pool, 'telemetry'):
+                    self.agent_pool.telemetry.record_llm_call_end(instance, output_tokens_est=_llm_output_est)
+            except Exception:
+                pass  # Telemetry must never block agent execution
+
             if self.agent_pool.stopped:
                 yield response
                 break
@@ -749,76 +783,117 @@ class OrchestratorAgent(Assistant):
                 use_tool, tool_name, tool_args, _ = self._detect_tool(out)
                 if not use_tool:
                     continue
-    
                 used_any_tool = True
                 # Yield the tool call request immediately so UI sees "calling tool..."
                 yield response
-    
-                if tool_name in self.STREAMING_TOOLS:
-                    # ── Streaming sub-agent call ──
-                    tool_result = yield from self._stream_sub_agent_call(
-                        tool_name, tool_args, response, messages
-                    )
-                else:
-                    # ── Normal synchronous tool ──
-                    
-                    # --- Handle __USE_PREV_ARG__ Placeholder Replacement ---
-                    if isinstance(tool_args, str):
-                        tool_args = tool_args.strip()
-                        if tool_args:
-                            try:
-                                # Use relaxed json_loads to handle trailing commas or other LLM quirks
-                                tool_args = json_loads(tool_args)
-                            except Exception:
-                                pass # Let _call_tool handle standard verification
-                        else:
-                            tool_args = {} # Guard against empty string arguments
-                    
-                    if isinstance(tool_args, dict):
-                        # Use the current instance name as the scope for the last_tool_args cache
-                        instance_scope = self.session_name
+                _tool_success = True
+                _tool_error = ""
+                try:
+                    if tool_name in self.STREAMING_TOOLS:
+                        # ── Streaming sub-agent call ──
+                        tool_result = yield from self._stream_sub_agent_call(
+                            tool_name, tool_args, response, messages
+                        )
+                    else:
+                        # ── Normal synchronous tool ──
                         
-                        # Resolve placeholders
-                        placeholders_found = []
-                        for arg_key, arg_val in tool_args.items():
-                            if arg_val == "__USE_PREV_ARG__":
-                                placeholders_found.append(arg_key)
+                        # --- Handle __USE_PREV_ARG__ Placeholder Replacement ---
+                        if isinstance(tool_args, str):
+                            tool_args = tool_args.strip()
+                            if tool_args:
+                                try:
+                                    # Use relaxed json_loads to handle trailing commas or other LLM quirks
+                                    tool_args = json_loads(tool_args)
+                                except Exception:
+                                    pass # Let _call_tool handle standard verification
+                            else:
+                                tool_args = {} # Guard against empty string arguments
+                        
+                        if isinstance(tool_args, dict):
+                            # Use the current instance name as the scope for the last_tool_args cache
+                            instance_scope = self.session_name
+                            
+                            # Resolve placeholders
+                            placeholders_found = []
+                            for arg_key, arg_val in tool_args.items():
+                                if arg_val == "__USE_PREV_ARG__":
+                                    placeholders_found.append(arg_key)
+                                    
+                            if placeholders_found:
+                                # 1. Try tool-specific cache first
+                                prev_args = self.agent_pool.last_tool_args.get(instance_scope, {}).get(tool_name)
                                 
-                        if placeholders_found:
-                            # 1. Try tool-specific cache first
-                            prev_args = self.agent_pool.last_tool_args.get(instance_scope, {}).get(tool_name)
-                            
-                            # 2. Fallback to global cache for common parameters like 'path'
-                            global_args = self.agent_pool.last_tool_args.get(instance_scope, {}).get("__GLOBAL__", {})
-                            
-                            if not prev_args and not global_args:
-                                tool_result = f"Error: Cannot use __USE_PREV_ARG__ for '{tool_name}' because no previous call to this tool was recorded for instance '{instance_scope}'."
-                                # Skip tool execution if placeholder fails
-                                skip_execution = True
+                                # 2. Fallback to global cache for common parameters like 'path'
+                                global_args = self.agent_pool.last_tool_args.get(instance_scope, {}).get("__GLOBAL__", {})
+                                
+                                if not prev_args and not global_args:
+                                    tool_result = f"Error: Cannot use __USE_PREV_ARG__ for '{tool_name}' because no previous call to this tool was recorded for instance '{instance_scope}'."
+                                    # Skip tool execution if placeholder fails
+                                    skip_execution = True
+                                else:
+                                    skip_execution = False
+                                    for arg_key in placeholders_found:
+                                        # Prefer tool-specific, then global
+                                        if prev_args and arg_key in prev_args:
+                                            tool_args[arg_key] = prev_args[arg_key]
+                                        elif arg_key in global_args:
+                                            tool_args[arg_key] = global_args[arg_key]
+                                        else:
+                                            tool_result = f"Error: Cannot use __USE_PREV_ARG__ for argument '{arg_key}' because it was not found in previous calls (neither specific to '{tool_name}' nor globally)."
+                                            skip_execution = True
+                                            break
                             else:
                                 skip_execution = False
-                                for arg_key in placeholders_found:
-                                    # Prefer tool-specific, then global
-                                    if prev_args and arg_key in prev_args:
-                                        tool_args[arg_key] = prev_args[arg_key]
-                                    elif arg_key in global_args:
-                                        tool_args[arg_key] = global_args[arg_key]
-                                    else:
-                                        tool_result = f"Error: Cannot use __USE_PREV_ARG__ for argument '{arg_key}' because it was not found in previous calls (neither specific to '{tool_name}' nor globally)."
-                                        skip_execution = True
-                                        break
+                                
+                            if not skip_execution:
+                                call_kwargs = kwargs.copy()
+                                if 'agent_instance_name' not in call_kwargs:
+                                    call_kwargs['agent_instance_name'] = self.session_name
+                                
+                                # Pass the agent itself so tools (like compress_context) can sync 
+                                # back to its base system_message for persistence across turns.
+                                call_kwargs['agent_obj'] = self
+                                    
+                                # Telemetry: track tool call
+                                try:
+                                    if hasattr(self.agent_pool, 'telemetry'):
+                                        self.agent_pool.telemetry.record_tool_call_start(self.session_name, tool_name)
+                                except Exception:
+                                    pass
+                                
+                                try:
+                                    tool_result = self._call_tool(
+                                        tool_name, tool_args, messages=llm_messages, 
+                                        **call_kwargs
+                                    )
+                                except Exception as e:
+                                    logger.error(f"Error calling tool {tool_name}: {e}")
+                                    tool_result = f"Error: {e}"
+                                    _tool_success = False
+                                    _tool_error = str(e)
+                                    if "valid JSON" in str(e) and isinstance(tool_args, str):
+                                        tool_result += f"\nYour arguments: {tool_args[:200]}..."
+                                
+                                # Caching: Save successful tool args for future reuse
+                                if instance_scope not in self.agent_pool.last_tool_args:
+                                    self.agent_pool.last_tool_args[instance_scope] = {}
+                                
+                                self.agent_pool.last_tool_args[instance_scope][tool_name] = copy.deepcopy(tool_args)
+                                if "__GLOBAL__" not in self.agent_pool.last_tool_args[instance_scope]:
+                                    self.agent_pool.last_tool_args[instance_scope]["__GLOBAL__"] = {}
+                                self.agent_pool.last_tool_args[instance_scope]["__GLOBAL__"].update(copy.deepcopy(tool_args))
                         else:
-                            skip_execution = False
-                            
-                        if not skip_execution:
+                            # Fallback for non-dict tool_args
                             call_kwargs = kwargs.copy()
                             if 'agent_instance_name' not in call_kwargs:
                                 call_kwargs['agent_instance_name'] = self.session_name
-                            
-                            # Pass the agent itself so tools (like compress_context) can sync 
-                            # back to its base system_message for persistence across turns.
                             call_kwargs['agent_obj'] = self
-                                
+                            try:
+                                if hasattr(self.agent_pool, 'telemetry'):
+                                    self.agent_pool.telemetry.record_tool_call_start(self.session_name, tool_name)
+                            except Exception:
+                                pass
+                            
                             try:
                                 tool_result = self._call_tool(
                                     tool_name, tool_args, messages=llm_messages, 
@@ -827,44 +902,64 @@ class OrchestratorAgent(Assistant):
                             except Exception as e:
                                 logger.error(f"Error calling tool {tool_name}: {e}")
                                 tool_result = f"Error: {e}"
-                                if "valid JSON" in str(e) and isinstance(tool_args, str):
-                                    tool_result += f"\nYour arguments: {tool_args[:200]}..."
-                            
-                            # Caching: Save successful tool args for future reuse
-                            # Note: We save them even if the tool returned an error string, 
-                            # as long as the arguments themselves were theoretically valid.
-                            if instance_scope not in self.agent_pool.last_tool_args:
-                                self.agent_pool.last_tool_args[instance_scope] = {}
-                            
-                            # Local Tool Cache
-                            self.agent_pool.last_tool_args[instance_scope][tool_name] = copy.deepcopy(tool_args)
-                            
-                            # Global Cache Fallback (for cross-tool reuse)
-                            if "__GLOBAL__" not in self.agent_pool.last_tool_args[instance_scope]:
-                                self.agent_pool.last_tool_args[instance_scope]["__GLOBAL__"] = {}
-                            self.agent_pool.last_tool_args[instance_scope]["__GLOBAL__"].update(copy.deepcopy(tool_args))
-                    else:
-                        # Fallback for non-dict tool_args
-                        call_kwargs = kwargs.copy()
-                        if 'agent_instance_name' not in call_kwargs:
-                            call_kwargs['agent_instance_name'] = self.session_name
-                        call_kwargs['agent_obj'] = self
+                                _tool_success = False
+                                _tool_error = str(e)
+                except Exception as e:
+                    # Catch high-level errors (like LoopDetectedError) to ensure telemetry is closed
+                    _tool_success = False
+                    _tool_error = str(e)
+                    tool_result = f"Error: {e}"
+                    # If it's a LoopDetectedError, we should re-raise after recording telemetry 
+                    # so the orchestrator turn stops as intended.
+                    if "Loop detected" in str(e):
+                        # Ensure telemetry is recorded before re-raising
                         try:
-                            tool_result = self._call_tool(
-                                tool_name, tool_args, messages=llm_messages, 
-                                **call_kwargs
-                            )
-                        except Exception as e:
-                            logger.error(f"Error calling tool {tool_name}: {e}")
-                            tool_result = f"Error: {e}"
-                            if "valid JSON" in str(e) and isinstance(tool_args, str):
-                                tool_result += f"\nYour arguments: {tool_args[:200]}..."
+                            if hasattr(self.agent_pool, 'telemetry'):
+                                self.agent_pool.telemetry.record_tool_call_end(
+                                    self.session_name, tool_name,
+                                    success=False,
+                                    result_chars=len(tool_result),
+                                    truncated=False,
+                                    error=_tool_error,
+                                )
+                        except Exception:
+                            pass
+                        raise e
     
                 # --- Generic truncation: protect ALL tool results ---
+                _was_truncated = False
                 if isinstance(tool_result, str):
+                    _pre_trunc_len = len(tool_result)
                     tool_result = self._truncate_tool_result(
                         tool_result, tool_name, llm_messages, self.session_name
                     )
+                    _was_truncated = len(tool_result) < _pre_trunc_len
+                
+                # --- Post-execution success detection ---
+                # Many tools return an error message as a string instead of raising an exception.
+                if _tool_success and isinstance(tool_result, str):
+                    lower_res = tool_result.lower().strip()
+                    error_indicators = [
+                        'error:', 'rejected by user:', 'failed:', 'invalid:', 
+                        'permission denied:', 'an error occurred', 'does not exist'
+                    ]
+                    if any(lower_res.startswith(ind) for ind in error_indicators) or 'failed to' in lower_res:
+                        _tool_success = False
+                        _tool_error = tool_result[:500] # Capture the start of the error message
+                
+                # Telemetry: record tool call end
+                try:
+                    if hasattr(self.agent_pool, 'telemetry'):
+                        _result_chars = len(tool_result) if isinstance(tool_result, str) else 0
+                        self.agent_pool.telemetry.record_tool_call_end(
+                            self.session_name, tool_name,
+                            success=_tool_success,
+                            result_chars=_result_chars,
+                            truncated=_was_truncated,
+                            error=_tool_error,
+                        )
+                except Exception:
+                    pass  # Telemetry must never block agent execution
     
                 fn_msg = Message(
                     role=FUNCTION,
@@ -1115,6 +1210,9 @@ class OrchestratorAgent(Assistant):
         # Track this call in the active stack for UI context switching
         self.agent_pool.active_stack.append(instance_name)
 
+        # Telemetry: record sub-agent delegation start time
+        _sub_agent_start = time.time()
+
         # Initialize streaming state for the WebUI
         state = {
             'active': True,
@@ -1240,10 +1338,22 @@ class OrchestratorAgent(Assistant):
                 # Extraction logic: get only text blocks from the last successful turn 
                 # to avoid repeating the whole task/context history in the manager's prompt.
                 result_str = extract_sub_agent_feedback(final_resp, instance_name)
+                # Telemetry: record sub-agent call completion
+                try:
+                    if hasattr(self.agent_pool, 'telemetry'):
+                        _sa_latency = (time.time() - _sub_agent_start) * 1000
+                        self.agent_pool.telemetry.record_sub_agent_call(
+                            self.session_name, agent_class, instance_name, latency_ms=_sa_latency
+                        )
+                except Exception:
+                    pass
                 return f"[{instance_name}'s output]:\n{result_str}"
             else:
                 return f"[{instance_name}] finished with no output."
 
+        except LoopDetectedError:
+            # Re-raise so the orchestrator's _run can catch it and propagate to api_server
+            raise
         except Exception as e:
             logger.error(f"Error in sub-agent {instance_name}: {str(e)}", exc_info=True)
             return f"Error executing sub-agent {instance_name}: {str(e)}"

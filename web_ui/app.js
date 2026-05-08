@@ -613,6 +613,11 @@ function handleServerMessage(data) {
       if (data.max_tokens !== undefined) state.maxTokens = data.max_tokens;
       if (data.summary !== undefined) state.summary = data.summary;
 
+      // Telemetry: update panel with session telemetry from server
+      if (data.telemetry) {
+        updateTelemetryPanel(data.telemetry);
+      }
+
       if (data.current_model && statusModel) {
         statusModel.textContent = data.current_model;
       }
@@ -631,6 +636,9 @@ function handleServerMessage(data) {
         // Final update for stats
         updateGenStats(state.messages, true);
         state.genStats.active = false;
+        
+        // Refresh telemetry config comparison after turn ends
+        fetchTelemetry();
       }
       
       updateMemoryTab();
@@ -659,6 +667,7 @@ function handleServerMessage(data) {
       if (data.total_words !== undefined) state.totalWords = data.total_words;
       if (data.max_tokens !== undefined) state.maxTokens = data.max_tokens;
       if (data.current_model && statusModel) statusModel.textContent = data.current_model;
+      if (data.telemetry) updateTelemetryPanel(data.telemetry);
 
       // Approvals require immediate rendering (user must see these promptly)
       if (data.approvals) {
@@ -2452,3 +2461,122 @@ if (saveSummaryBtn) {
     }, 2000);
   });
 }
+
+// ── Telemetry Panel ──────────────────────────────────────────────────────────
+
+function formatNumber(n) {
+  if (n === undefined || n === null) return '—';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function formatMs(ms) {
+  if (!ms || ms === 0) return '—';
+  if (ms >= 60000) return (ms / 60000).toFixed(1) + 'min';
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's';
+  return Math.round(ms) + 'ms';
+}
+
+function getSuccessClass(rate) {
+  if (rate >= 95) return 'telem-success';
+  if (rate >= 75) return 'telem-warning';
+  return 'telem-danger';
+}
+
+function updateTelemetryPanel(telemetry) {
+  if (!telemetry) return;
+
+  // Session stats cards
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+
+  set('telem-turns', formatNumber(telemetry.total_turns));
+  set('telem-llm-calls', formatNumber(telemetry.total_llm_calls));
+  set('telem-tool-calls', formatNumber(telemetry.total_tool_calls));
+  set('telem-sa-calls', formatNumber(telemetry.sub_agent_calls));
+  set('telem-input-tokens', formatNumber(telemetry.total_input_tokens_est));
+  set('telem-output-tokens', formatNumber(telemetry.total_output_tokens_est));
+  set('telem-total-tokens', formatNumber(telemetry.total_tokens));
+  set('telem-avg-tps', telemetry.avg_tps ? telemetry.avg_tps.toFixed(1) : '—');
+  set('telem-avg-llm-lat', formatMs(telemetry.avg_llm_latency_ms));
+  set('telem-avg-tool-lat', formatMs(telemetry.avg_tool_latency_ms));
+  set('telem-loops', formatNumber(telemetry.total_loops_detected));
+  set('telem-compressions', formatNumber(telemetry.total_compressions));
+
+  // Tool effectiveness table
+  const toolTbody = document.getElementById('telem-tool-tbody');
+  if (toolTbody && telemetry.tool_effectiveness) {
+    const tools = telemetry.tool_effectiveness;
+    const entries = Object.entries(tools);
+    if (entries.length === 0) {
+      toolTbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-secondary)">No tool data yet</td></tr>';
+    } else {
+      // Sort by total calls descending
+      entries.sort((a, b) => b[1].total - a[1].total);
+      toolTbody.innerHTML = entries.map(([name, data]) => {
+        const rateClass = getSuccessClass(data.success_rate);
+        return `<tr>
+          <td title="${name}">${name}</td>
+          <td>${data.total}</td>
+          <td class="${rateClass}">${data.success_rate}%</td>
+          <td>${formatMs(data.avg_latency_ms)}</td>
+        </tr>`;
+      }).join('');
+    }
+  }
+}
+
+function updateTelemetryConfigTable(configs) {
+  const configTbody = document.getElementById('telem-config-tbody');
+  if (!configTbody) return;
+
+  if (!configs || configs.length === 0) {
+    configTbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-secondary)">No config data yet</td></tr>';
+    return;
+  }
+
+  configTbody.innerHTML = configs.map(c => {
+    const desc = c.config_description || {};
+    const label = desc.model
+      ? `${desc.model} T=${desc.temperature ?? '?'}`
+      : c.config_fingerprint.slice(0, 8);
+    return `<tr>
+      <td title="${c.config_fingerprint}"><span class="telem-config-tag">${label}</span></td>
+      <td>${c.turns}</td>
+      <td>${formatNumber(c.total_tokens)}</td>
+      <td>${formatMs(c.avg_turn_duration_ms)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// Fetch full telemetry from API (for config comparison data not in WebSocket)
+async function fetchTelemetry() {
+  try {
+    const res = await fetch('/api/telemetry');
+    const data = await res.json();
+    if (data.session) updateTelemetryPanel(data.session);
+    if (data.configs) updateTelemetryConfigTable(data.configs);
+  } catch (err) {
+    console.warn('Failed to fetch telemetry:', err);
+  }
+}
+
+// Export telemetry JSONL
+const telemExportBtn = document.getElementById('telem-export-btn');
+if (telemExportBtn) {
+  telemExportBtn.addEventListener('click', () => {
+    window.open('/api/telemetry/export', '_blank');
+  });
+}
+
+// Refresh telemetry when the Telemetry settings tab becomes active
+document.querySelectorAll('.settings-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    if (tab.dataset.tab === 'settings-telemetry') {
+      fetchTelemetry();
+    }
+  });
+});

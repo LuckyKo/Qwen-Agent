@@ -399,6 +399,15 @@ def create_app(agents, agent_pool, config=None):
             return agent_pool.operation_manager.list_pending_approvals()
         return []
 
+    def _safe_get_telemetry():
+        """Get telemetry summary safely — never crash state serialization."""
+        try:
+            if agent_pool and hasattr(agent_pool, 'telemetry'):
+                return agent_pool.telemetry.get_session_summary()
+        except Exception:
+            pass
+        return None
+
     def build_state(responses=None, generating=None):
         """Build a full state snapshot for the frontend."""
         msgs = list(session['history'])
@@ -444,6 +453,7 @@ def create_app(agents, agent_pool, config=None):
             'total_words': total_words,
             'max_tokens': max_tokens,
             'summary': current_summary,
+            'telemetry': _safe_get_telemetry(),
             'agents': [
                 {'name': getattr(a, 'name', f'Agent-{i}'), 'index': i,
                  'description': getattr(a, 'description', ''),
@@ -454,7 +464,7 @@ def create_app(agents, agent_pool, config=None):
             'current_model': getattr(get_agent().llm, 'model', 'Unknown') if hasattr(get_agent(), 'llm') and get_agent().llm else 'Unknown',
         }
 
-    def build_stream_update(responses, cached_h_stats=None, sub_agents=None):
+    def build_stream_update(responses, cached_h_stats=None, sub_agents=None, telemetry=None):
         """Build a lightweight streaming delta (skips re-serializing stable history).
 
         Args:
@@ -463,6 +473,8 @@ def create_app(agents, agent_pool, config=None):
                            If None, falls back to get_history_stats(session['history']).
             sub_agents: Pre-serialized sub-agent state. Only recompute every ~5 ticks;
                        on intermediate ticks the client tolerates slight staleness.
+            telemetry: Pre-serialized session telemetry summary. Only recompute every ~20 ticks
+                       (approx 3 seconds) to avoid heavy re-aggregation during streaming.
         """
         history_count = len(session['history'])
 
@@ -485,6 +497,7 @@ def create_app(agents, agent_pool, config=None):
             'total_words': h_stats['words'] + r_stats['words'],
             'max_tokens': get_agent_max_tokens(orch_agent),
             'current_model': getattr(orch_agent.llm, 'model', 'Unknown') if hasattr(orch_agent, 'llm') and orch_agent.llm else 'Unknown',
+            'telemetry': telemetry,
         }
 
     async def broadcast(data):
@@ -603,6 +616,35 @@ def create_app(agents, agent_pool, config=None):
             
             auto_rollback_enabled = ui_cfg.get('auto_rollback_on_loop', True)
             current_history = history_for_agent # Start with the copy provided
+
+            # ── Telemetry: Record turn start with config fingerprint ──
+            _telem = agent_pool.telemetry if agent_pool and hasattr(agent_pool, 'telemetry') else None
+            try:
+                if _telem:
+                    from telemetry import TelemetryCollector
+                    _model_name = getattr(agent_runner.llm, 'model', 'unknown') if has_llm else 'unknown'
+                    _tool_names = list(agent_runner.function_map.keys()) if hasattr(agent_runner, 'function_map') else []
+                    _sys_prompt = ''
+                    if current_history and current_history[0].get(ROLE) == SYSTEM:
+                        _sys_prompt = current_history[0].get(CONTENT, '')[:2000]
+                    _cfg_fp = TelemetryCollector.fingerprint_config(
+                        model=_model_name,
+                        generate_cfg=ui_cfg,
+                        system_prompt=_sys_prompt,
+                        tools=_tool_names,
+                    )
+                    _cfg_desc = TelemetryCollector.describe_config(
+                        model=_model_name,
+                        generate_cfg=ui_cfg,
+                        tools=_tool_names,
+                    )
+                    _telem.record_turn_start(
+                        session['session_name'],
+                        config_fingerprint=_cfg_fp,
+                        config_description=_cfg_desc,
+                    )
+            except Exception:
+                pass  # Telemetry must never block agent execution
             
             while retry_count <= max_auto_retries:
                 should_retry = False
@@ -644,9 +686,14 @@ def create_app(agents, agent_pool, config=None):
                                 sub_agents_cache = get_sub_agent_state()
                                 if agent_pool:
                                     agent_pool._last_seen_stack = current_stack
+                            
+                            # Throttle telemetry to ~3s (every 20 ticks) to keep it lightweight
+                            _telem_payload = None
+                            if tick_num % 20 == 0:
+                                _telem_payload = _safe_get_telemetry()
 
                             # UI expects history count to match current_history
-                            delta = build_stream_update(responses, cached_h_stats=cached_h_stats, sub_agents=sub_agents_cache)
+                            delta = build_stream_update(responses, cached_h_stats=cached_h_stats, sub_agents=sub_agents_cache, telemetry=_telem_payload)
                             # Override history_count in delta for consistency with current_history
                             delta['history_count'] = len(current_history)
                             
@@ -785,6 +832,14 @@ def create_app(agents, agent_pool, config=None):
                 agent_runner.turn_final_messages = None
 
             _save_session_history()
+
+            # ── Telemetry: Record turn end ──
+            try:
+                if _telem:
+                    _telem.record_turn_end(session['session_name'])
+            except Exception:
+                pass
+
             final = build_state(generating=False)
             asyncio.run_coroutine_threadsafe(send_queue.put({'type': 'done', **final}), loop)
 
@@ -933,6 +988,28 @@ def create_app(agents, agent_pool, config=None):
         if os.path.exists(path):
             return FileResponse(path)
         return JSONResponse(status_code=404, content={"message": "File not found"})
+
+    @app.get("/api/telemetry")
+    async def api_telemetry():
+        """Return session telemetry summary and per-config comparison data."""
+        if agent_pool and hasattr(agent_pool, 'telemetry'):
+            return {
+                "session": agent_pool.telemetry.get_session_summary(),
+                "configs": agent_pool.telemetry.get_config_comparison(),
+                "recent_events": agent_pool.telemetry.get_recent_events(50),
+            }
+        return {"session": {}, "configs": [], "recent_events": []}
+
+    @app.get("/api/telemetry/export")
+    async def api_telemetry_export():
+        """Download the raw telemetry JSONL log file."""
+        from fastapi.responses import FileResponse, JSONResponse
+        if agent_pool and hasattr(agent_pool, 'telemetry'):
+            path = agent_pool.telemetry.export_jsonl()
+            import os
+            if os.path.exists(path):
+                return FileResponse(path, media_type='application/jsonlines', filename=os.path.basename(path))
+        return JSONResponse(status_code=404, content={"message": "No telemetry data available"})
 
     # ── WebSocket ─────────────────────────────────────────────────────────
 

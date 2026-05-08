@@ -183,6 +183,7 @@
             <button class="settings-tab active" data-tab="settings-general">General</button>
             <button class="settings-tab" data-tab="settings-agent">Agent & Tools</button>
             <button class="settings-tab" data-tab="settings-memory">Memory</button>
+            <button class="settings-tab" data-tab="settings-telemetry">Telemetry</button>
           </div>
         </div>
 
@@ -433,6 +434,100 @@
                     </svg>
                     Update Memory
                   </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Telemetry Tab -->
+          <div class="settings-tab-panel" id="settings-telemetry">
+            <div class="settings-content">
+              <div class="settings-section">
+                <h3 class="settings-section-title">Session Stats</h3>
+                <div class="settings-section-body">
+                  <div id="telemetry-session-stats" class="telemetry-grid">
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Turns</div>
+                      <div class="telemetry-value" id="telem-turns">0</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">LLM Calls</div>
+                      <div class="telemetry-value" id="telem-llm-calls">0</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Tool Calls</div>
+                      <div class="telemetry-value" id="telem-tool-calls">0</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Sub-Agent Calls</div>
+                      <div class="telemetry-value" id="telem-sa-calls">0</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Input Tokens (est)</div>
+                      <div class="telemetry-value" id="telem-input-tokens">0</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Output Tokens (est)</div>
+                      <div class="telemetry-value" id="telem-output-tokens">0</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Total Tokens</div>
+                      <div class="telemetry-value" id="telem-total-tokens">0</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Avg TPS</div>
+                      <div class="telemetry-value" id="telem-avg-tps">—</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Avg LLM Latency</div>
+                      <div class="telemetry-value" id="telem-avg-llm-lat">—</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Avg Tool Latency</div>
+                      <div class="telemetry-value" id="telem-avg-tool-lat">—</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Loops Detected</div>
+                      <div class="telemetry-value" id="telem-loops">0</div>
+                    </div>
+                    <div class="telemetry-card">
+                      <div class="telemetry-label">Compressions</div>
+                      <div class="telemetry-value" id="telem-compressions">0</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-section">
+                <h3 class="settings-section-title">Tool Effectiveness</h3>
+                <div class="settings-section-body">
+                  <div id="telemetry-tool-table" class="telemetry-table-container">
+                    <table class="telemetry-table">
+                      <thead>
+                        <tr><th>Tool</th><th>Calls</th><th>Success</th><th>Avg Latency</th></tr>
+                      </thead>
+                      <tbody id="telem-tool-tbody">
+                        <tr><td colspan="4" style="text-align:center; color:var(--text-secondary)">No data yet</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-section">
+                <h3 class="settings-section-title">Config Fingerprint (A/B)</h3>
+                <div class="settings-section-body">
+                  <div id="telemetry-config-table" class="telemetry-table-container">
+                    <table class="telemetry-table">
+                      <thead>
+                        <tr><th>Config</th><th>Turns</th><th>Tokens</th><th>Avg Turn</th></tr>
+                      </thead>
+                      <tbody id="telem-config-tbody">
+                        <tr><td colspan="4" style="text-align:center; color:var(--text-secondary)">No data yet</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <button id="telem-export-btn" class="btn btn-secondary" style="width: 100%; margin-top: 12px;">📥 Export Raw Telemetry (JSONL)</button>
                 </div>
               </div>
             </div>

@@ -1,6 +1,6 @@
 # TODO:
 
-[ ] Add telemetry for agent performace and tool usage effectiveness tracking
+[x] Add telemetry for agent performace and tool usage effectiveness tracking
 [ ] Add multiple API endpoints for all LLMs, shown in a list to access in priority order (movable up/down via arrows). A toggle for each one if it's enabled or not, with a button to expand it for API KEY/model details.
 [ ] Add support for agent soul refresh at any time with a command (for example "/refresh" command) or a tool call
 [ ] Parametrize all internal prompts to easy swap for A-B testing (eventually creating a DNA that saves a specific configuration of the framework with propts and other parameters

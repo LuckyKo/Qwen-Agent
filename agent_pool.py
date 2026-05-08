@@ -21,6 +21,7 @@ from qwen_agent.utils.utils import extract_text_from_message
 from qwen_agent.settings import DEFAULT_WORKSPACE
 
 from agent_logger import AgentInstanceLogger
+from telemetry import TelemetryCollector
 
 
 class AgentPool:
@@ -37,6 +38,10 @@ class AgentPool:
         # Initialize OperationManager for blocking approvals
         from operation_manager import OperationManager
         self.operation_manager = OperationManager(base_dir=DEFAULT_WORKSPACE, agent_pool=self)
+        
+        # Initialize Telemetry Collector for performance tracking
+        telemetry_dir = str(Path(DEFAULT_WORKSPACE) / 'telemetry')
+        self.telemetry = TelemetryCollector(log_dir=telemetry_dir)
         
         # Persistent conversation histories for each named instance
         self.instance_conversations: Dict[str, List] = {}
