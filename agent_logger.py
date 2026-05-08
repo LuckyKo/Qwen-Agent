@@ -126,22 +126,44 @@ class AgentInstanceLogger:
         """
         Update internal tracking after a compression event.
         
-        The JSONL log file is APPEND-ONLY and preserves the full uncompressed
-        history. This method only:
-        1. Writes a compression marker so readers know compression happened
-        2. Resets the internal data["history"] to the new compressed baseline
-           so that subsequent update_history() calls match correctly
-        
-        It does NOT re-write compressed messages to the file.
+        We insert the compressed summary back into the persistent log file
+        at the same point it appears in the cached message queue (new_history).
         """
         import datetime as _dt
-        # Write a visible marker so log readers know compression happened here
-        self._append_line({
-            "event": "COMPRESSION",
-            "timestamp": _dt.datetime.now().isoformat(),
-            "new_message_count": len(new_history),
-            "message": "Context was compressed. Messages above are the full history. The agent now sees a compressed version."
-        })
+        
+        # Find the summary message in new_history
+        summary_msg = None
+        idx_in_new = -1
+        for i, msg in enumerate(new_history):
+            content = msg.get('content', '') if isinstance(msg, dict) else getattr(msg, 'content', '')
+            if isinstance(content, str) and "<context_summary>" in content:
+                summary_msg = self._format_message(msg)
+                idx_in_new = i
+                break
+                
+        if summary_msg and idx_in_new != -1:
+            # We append the summary AND the remaining messages to the log file.
+            # This ensures that on load, load_session_from_log finds the summary 
+            # and takes all subsequent messages as the 'rest of log' working set.
+            # The original messages are still preserved earlier in the log.
+            self._append_line({
+                "event": "COMPRESSION",
+                "timestamp": _dt.datetime.now().isoformat(),
+                "message": "Context was compressed. Re-asserting working set baseline."
+            })
+            
+            # 1. Append the summary message
+            self._append_line(summary_msg)
+            
+            # 2. Append all messages that follow the summary in the new working set
+            # (These were already in the log, but we re-append them so they are 
+            # found after the latest summary marker on load)
+            for i in range(idx_in_new + 1, len(new_history)):
+                self._append_line(self._format_message(new_history[i]))
+                
+            logger.info(f"Appended summary baseline and {len(new_history)-1-idx_in_new} messages to agent log {self.log_path}.")
+        else:
+            logger.warning(f"Could not find summary marker in new_history for {self.instance_name}. No baseline appended.")
         
         # Reset internal tracking to the compressed baseline.
         # This is critical: update_history() does sequential matching against
@@ -165,14 +187,19 @@ class AgentInstanceLogger:
             else:
                 break
         
-        # Re-write the log file (Metadata + remaining History)
+        # Remove lines from the end of the physical log file
         try:
-            lines = [json.dumps({"metadata": self.data["metadata"]}, ensure_ascii=False)]
-            for msg in self.data["history"]:
-                lines.append(json.dumps(msg, ensure_ascii=False))
+            with open(self.log_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
             
+            # Make sure we don't pop the metadata line
+            if len(lines) > count + 1:
+                lines = lines[:-count]
+            else:
+                lines = [lines[0]] if lines else []
+                
             with open(self.log_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(lines) + '\n')
+                f.writelines(lines)
         except Exception as e:
             logger.error(f"Failed to rollback agent log {self.log_path}: {e}")
 

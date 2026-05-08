@@ -37,6 +37,69 @@ from qwen_agent.utils.utils import (
 
 from agent_pool import AgentPool
 
+def detect_loop(messages: List[Union[dict, Message]]) -> Optional[str]:
+    """
+    Detect if the agent is stuck in a loop.
+    Returns a description of the loop if found, else None.
+    """
+    if len(messages) < 6:
+        return None
+    
+    # Extract identifying features, ignoring SYSTEM messages
+    def get_feature(m):
+        if isinstance(m, Message):
+            m = m.model_dump()
+        
+        role = m.get(ROLE)
+        content = m.get(CONTENT, '')
+        if isinstance(content, list):
+            # For multimodal content, just use the text parts
+            text_parts = [item.get('text', '') for item in content if isinstance(item, dict) and item.get('type') == 'text']
+            content = " ".join(text_parts)
+        content = str(content)
+        
+        reasoning = str(m.get('reasoning_content', ''))
+        
+        # If content is empty but reasoning is present, use reasoning as feature
+        if not content and reasoning:
+            content = reasoning
+            
+        fc = m.get('function_call')
+        if fc:
+            # For tool calls, name + args is the best fingerprint
+            return f"{role}:{fc.get('name')}:{fc.get('arguments')}"
+        
+        # For plain messages, use first 200 chars of content
+        return f"{role}:{content[:200]}"
+
+    # Only look at the last 40 messages to detect recent loops
+    window = messages[-40:]
+    features = [get_feature(m) for m in window if (m.get(ROLE) if isinstance(m, dict) else getattr(m, 'role', '')) != SYSTEM]
+    
+    if len(features) < 4:
+        return None
+
+    # Generic loop detection for pattern length L repeating K times
+    for L in range(1, 21):
+        K = 3 if L < 5 else 2
+        
+        if len(features) < L * K:
+            continue
+            
+        for i in range(len(features) - (L * K), -1, -1):
+            pattern = features[i : i + L]
+            is_loop = True
+            for k in range(1, K):
+                if features[i + k * L : i + (k + 1) * L] != pattern:
+                    is_loop = False
+                    break
+            if is_loop:
+                if features[-L:] == pattern:
+                    roles = [p.split(':')[0] for p in pattern]
+                    return f"Detected repeated sequence loop ({', '.join(roles)} repeating {K} times)"
+            
+    return None
+
 # ─── Sub-agent function schemas ────────────────────────────────────────────────
 # These are NOT called via _call_tool; OrchestratorAgent._run intercepts them
 # and handles them as streaming generators. They exist only so the LLM sees
@@ -610,10 +673,17 @@ class OrchestratorAgent(Assistant):
             # Inject warning if needed (only for the LLM call, doesn't affect saved history)
             self._inject_compression_warning(llm_messages)
             
-            # DEBUG: Inspect message roles to find "Start with User" violations
-            # msg_roles = [m.role for m in llm_messages]
-            # logger.info(f"LLM Call Order: {msg_roles}")
-    
+            # --- LOOP DETECTION ---
+            loop_reason = detect_loop(messages)
+            if loop_reason:
+                logger.warning(f"Loop detected for {self.name}: {loop_reason}")
+                error_msg = Message(role=ASSISTANT, content=f"\n\n[LOOP DETECTED: {loop_reason}. Halting to prevent token waste. Please review your last few turns and change your strategy.]")
+                response.append(error_msg)
+                messages.append(error_msg)
+                logger_inst.log_message(error_msg)
+                yield response
+                break
+
             active_functions = self._get_active_functions()
             
             # --- Call LLM and handle streaming ---
@@ -1125,12 +1195,23 @@ class OrchestratorAgent(Assistant):
             
             # agent.run mutates the passed list, so we pass a copy to avoid double-appending
             # when we do state['messages'] = conv + resp
-            run_conv = copy.deepcopy(conv)
+            # Extract the optimized working set for the LLM
+            working_history = self.agent_pool.slice_history_for_llm(conv)
             
             # Pass instance name through kwargs so tools (like compress_context) know who they are contextually
-            for resp in agent.run(run_conv, agent_instance_name=instance_name):
+            for resp in agent.run(working_history, agent_instance_name=instance_name):
                 if self.agent_pool.stopped:
                     logger.info(f"Sub-agent {instance_name} interrupted by user stop signal.")
+                    yield current_response
+                    break
+                
+                # --- SUB-AGENT LOOP DETECTION ---
+                loop_reason = detect_loop(resp)
+                if loop_reason:
+                    logger.warning(f"Loop detected for sub-agent {instance_name}: {loop_reason}")
+                    # Force termination of the sub-agent run
+                    final_resp = resp + [Message(role=ASSISTANT, content=f"\n\n[LOOP DETECTED: {loop_reason}. Sub-agent execution halted.]")]
+                    state['messages'] = list(conv) + list(final_resp)
                     yield current_response
                     break
                     

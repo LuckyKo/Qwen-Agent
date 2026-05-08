@@ -13,6 +13,7 @@ from qwen_agent.tools.code_interpreter import CodeInterpreter
 from qwen_agent.tools.custom import (
     ReadFile, ViewImage, WriteFile, EditFile, ListDir, Grep,
     DeleteFile, CopyFile, MoveFile, DismissAgent, ListAgents, ShellCmd, SystemInfo,
+    ReadLogs,
 )
 from qwen_agent.tools.custom.compression_tools import CompressContext
 from soul_loader import create_agent_from_soul
@@ -93,11 +94,15 @@ def register_standard_tools(agent, agent_pool, agent_name: str):
     shell_tool.agent_name = agent_name
     agent.function_map['shell_cmd'] = shell_tool
 
-    # ── System Information ──
     info_tool = SystemInfo()
     info_tool.agent_pool = agent_pool
     info_tool.agent_name = agent_name
     agent.function_map['system_info'] = info_tool
+
+    # ── Log Reading ──
+    read_logs_tool = ReadLogs()
+    read_logs_tool.agent_pool = agent_pool
+    agent.function_map['read_logs'] = read_logs_tool
 
     # ── Code Interpreter (sandbox) ──
     try:

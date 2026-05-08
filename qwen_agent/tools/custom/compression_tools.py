@@ -59,7 +59,8 @@ class CompressContext(BaseTool):
             role = msg.get('role', 'unknown').upper() if isinstance(msg, dict) else getattr(msg, 'role', 'unknown').upper()
             content = msg.get('content', '') if isinstance(msg, dict) else getattr(msg, 'content', '')
             if isinstance(content, list):
-                content = " ".join([item.get('text', '') if isinstance(item, dict) else getattr(item, 'text', str(item)) for item in content])
+                # Ensure all parts are converted to strings safely, handling None values in ContentItems
+                content = " ".join([str(item.get('text', '') or '') if isinstance(item, dict) else str(getattr(item, 'text', None) or item) for item in content])
             history_text += f"{role}: {content}\n\n"
             
         # Call LLM to generate summary
@@ -137,8 +138,17 @@ class CompressContext(BaseTool):
         if not self.agent_pool:
             return "ERROR: agent_pool not connected to tool"
             
-        # Prioritize instance name passed via kwargs (from Agent._call_tool)
-        agent_name = kwargs.get('agent_instance_name') or self.agent_name or 'orchestrator'
+        # Prioritize instance name: 
+        # 1. From kwargs (explicitly passed)
+        # 2. From agent_obj (the running agent instance)
+        # 3. From self.agent_name (the class-level name set during tool registration)
+        agent_obj = kwargs.get('agent_obj')
+        agent_name = (
+            kwargs.get('agent_instance_name') or 
+            getattr(agent_obj, 'instance_name', None) or 
+            self.agent_name or 
+            'orchestrator'
+        )
         
         # Use current messages from kwargs if available to catch the very latest context,
         # otherwise fallback to the persistent pool.
@@ -287,7 +297,14 @@ class CompressContext(BaseTool):
                     num_to_remove_active = 0
 
                 if num_to_remove_active > 0:
-                    summary_content = f"\n\n--- CONTEXT COMPRESSED ({int(fraction*100)}% of history summarized) ---\n\nSummary of previous context:\n{summary}\n\n--- END SUMMARY ---"
+                    summary_content = (
+                        f"--- CONTEXT COMPRESSED ({int(fraction*100)}% of history summarized) ---\n"
+                        f"The following is a summary of the conversation context that was removed to save space.\n"
+                        f"Summary of previous context:\n"
+                        f"<context_summary>\n"
+                        f"{summary}\n"
+                        f"</context_summary>"
+                    )
                     
                     new_active = []
                     if start_idx_active == 1:
@@ -305,8 +322,11 @@ class CompressContext(BaseTool):
                     active_msgs.extend(new_active)
 
             return (
-                f"Context compressed ({mode} mode): {int(fraction*100)}% of older history for agent '{agent_name}' "
-                f"has been summarized and removed from your context window.\n\nSummary:\n{summary}"
+                f"Context compressed ({mode} mode): {int(fraction*100)}% of older history for agent '{agent_name}' has been summarized and removed from your context window.\n\n"
+                f"Summary:\n"
+                f"<context_summary>\n"
+                f"{summary}\n"
+                f"</context_summary>"
             )
         except Exception as e:
             return f"ERROR: Compression failed: {str(e)}"

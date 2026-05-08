@@ -6,6 +6,7 @@ from .manager_ops import (
 )
 from .shell_cmd import ShellCmd
 from .system_info import SystemInfo
+from .read_logs import ReadLogs
 
 __all__ = [
     'ReadFile',
@@ -22,4 +23,5 @@ __all__ = [
     'ListAgents',
     'ShellCmd',
     'SystemInfo',
+    'ReadLogs',
 ]

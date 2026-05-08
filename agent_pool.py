@@ -46,6 +46,9 @@ class AgentPool:
         # Mapping of instance_name to its AgentInstanceLogger
         self.instance_loggers: Dict[str, AgentInstanceLogger] = {}
         
+        # Mapping of instance_name to its active compression summary
+        self.instance_summaries: Dict[str, str] = {}
+        
         # Live streaming state for WebUI (updated during sub-agent execution)
         self.sub_agent_state: Dict[str, dict] = {}
         
@@ -240,6 +243,38 @@ rules:
             self.instance_conversations[instance_name] = []
         return self.instance_conversations[instance_name]
 
+    def slice_history_for_llm(self, history: List[Union[dict, Message]]) -> List[Union[dict, Message]]:
+        """
+        Extract the 'working set' from a full conversation history.
+        Preserves the first SYSTEM message and slices from the latest <context_summary> onwards.
+        """
+        if not history:
+            return []
+            
+        latest_summary_idx = -1
+        for i in range(len(history) - 1, -1, -1):
+            msg = history[i]
+            content = msg.get(CONTENT, '') if isinstance(msg, dict) else getattr(msg, 'content', '')
+            if isinstance(content, str) and "<context_summary>" in content:
+                latest_summary_idx = i
+                break
+                
+        if latest_summary_idx == -1:
+            return history
+            
+        system_msg = None
+        first_role = history[0].get(ROLE) if isinstance(history[0], dict) else getattr(history[0], 'role', '')
+        if first_role == SYSTEM:
+            system_msg = history[0]
+            
+        sliced = history[latest_summary_idx:]
+        
+        # Ensure system message is at the top
+        if system_msg and (sliced[0].get(ROLE) if isinstance(sliced[0], dict) else getattr(sliced[0], 'role', '')) != SYSTEM:
+            return [system_msg] + list(sliced)
+            
+        return list(sliced)
+
     def clear_conversation(self, instance_name: str):
         """Clear an agent instance's conversation history."""
         self.instance_conversations.pop(instance_name, None)
@@ -347,6 +382,36 @@ rules:
 
         if not cleaned_messages:
             return "Error: No valid conversation messages found."
+            
+        # On session load/restore we'll read from latest summary onwards
+        latest_summary_idx = -1
+        for i in range(len(cleaned_messages) - 1, -1, -1):
+            msg = cleaned_messages[i]
+            content = msg.get(CONTENT, '')
+            if isinstance(content, str) and "<context_summary>" in content:
+                latest_summary_idx = i
+                break
+                
+        if latest_summary_idx != -1:
+            # Extract raw summary from markers
+            summary_msg = cleaned_messages[latest_summary_idx].get(CONTENT, '')
+            import re
+            # Only match content INSIDE the tags
+            match = re.search(r"<context_summary>\s*\n(.*?)\s*</context_summary>", summary_msg, re.DOTALL)
+            if match:
+                self.instance_summaries[instance_name] = match.group(1).strip()
+
+            system_msg = None
+            if len(cleaned_messages) > 0 and cleaned_messages[0].get(ROLE) == SYSTEM:
+                system_msg = cleaned_messages[0]
+                
+            sliced_messages = cleaned_messages[latest_summary_idx:]
+            
+            # Ensure the system message remains at the top
+            if system_msg and sliced_messages[0].get(ROLE) != SYSTEM:
+                sliced_messages.insert(0, system_msg)
+                
+            cleaned_messages = cleaned_messages
 
         # Restore to pool
         self.instance_conversations[instance_name] = cleaned_messages
@@ -461,31 +526,35 @@ rules:
             return
             
         # Create the summary text
-        summary_text = f"\n\n--- CONTEXT COMPRESSED ({int(fraction*100)}% of history summarized) ---\n\nSummary of previous context:\n{summary}\n\n--- END SUMMARY ---"
+        summary_text = (
+            f"--- CONTEXT COMPRESSED ({int(fraction*100)}% of history summarized) ---\n"
+            f"The following is a summary of the conversation context that was removed to save space.\n"
+            f"Summary of previous context:\n"
+            f"<context_summary>\n"
+            f"{summary}\n"
+            f"</context_summary>"
+        )
         
-        # New history: [System (if any)] + [User (with summary)] + [Remaining Messages]
-        new_history = []
+        # New history baseline marker
         is_dict = isinstance(system_msg, dict) if system_msg else isinstance(messages_to_compress[0], dict)
+        # Insert the summary message at the boundary point in the FULL history.
+        # This keeps the history non-destructive for the UI, while slice_history_for_llm
+        # will find the marker and provide a clean working set to the LLM.
+        summary_msg = {'role': USER, 'content': str(summary_text)} if is_dict else Message(role=USER, content=str(summary_text))
         
-        if system_msg:
-            new_history.append(system_msg)
-            
-        if is_dict:
-            new_history.append({'role': USER, 'content': str(summary_text)})
-        else:
-            new_history.append(Message(role=USER, content=str(summary_text)))
-            
-        new_history.extend(messages_to_compress[num_to_remove:])
+        insert_idx = num_to_remove + (1 if system_msg else 0)
+        history.insert(insert_idx, summary_msg)
         
-        # Modify list in-place so active references (like 'conv' in _stream_sub_agent_call) remain valid!
-        history.clear()
-        history.extend(new_history)
+        # Track the active summary
+        self.instance_summaries[agent_name] = summary
         
-        # Reset the logger's internal tracking to this new baseline.
+        # Notify the logger that a compression event happened.
+        # We pass the full history (which now includes the summary marker).
+        # The logger's reset_history will append the summary to the log file.
         if agent_name in self.instance_loggers:
-            self.instance_loggers[agent_name].reset_history(new_history)
+            self.instance_loggers[agent_name].reset_history(history)
             
-        logger.info(f"Compressed context for agent '{agent_name}'. Removed {num_to_remove} messages.")
+        logger.info(f"Inserted context summary baseline for agent '{agent_name}' at index {insert_idx}. Full history preserved.")
     
     def get_agent_info(self, agent_name: str) -> Optional[dict]:
         """Get info about a specific agent."""

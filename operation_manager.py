@@ -231,7 +231,16 @@ class OperationManager:
 
     def _resolve_path(self, path: str) -> Path:
         """Resolve a path to be within the base directory or extra folders (security)."""
-        resolved = (self.base_dir / path).resolve()
+        # Handle virtual /workspace/ prefix used by agents (common in system prompts)
+        clean_path = path
+        if clean_path.startswith('/workspace/'):
+            clean_path = clean_path[len('/workspace/'):]
+        elif clean_path.startswith('workspace/'):
+            clean_path = clean_path[len('workspace/'):]
+        elif clean_path == '/workspace' or clean_path == 'workspace':
+            clean_path = '.'
+            
+        resolved = (self.base_dir / clean_path).resolve()
         
         # Check if it starts with base_dir
         if str(resolved).startswith(str(self.base_dir)):
@@ -247,6 +256,7 @@ class OperationManager:
                 return resolved
 
         raise ValueError(f"Path '{path}' is outside the allowed directories")
+
 
     # ─── Read Operations (Free Access) ────────────────────────────────────
 

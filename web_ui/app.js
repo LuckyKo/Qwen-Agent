@@ -50,6 +50,7 @@ const state = {
   totalWords: 0,
   maxTokens: 32768,
   autoSecurity: false,
+  summary: "", // Active compression summary
 };
 
 let ws = null;
@@ -110,6 +111,10 @@ const settingMcpServers = $('#setting-mcp-servers');
 const afkToggle = $('#afkToggle');
 const autoSecurityToggle = $('#autoSecurityToggle');
 const settingAfkMessage = $('#setting-afk-message');
+const settingSummaryText = $('#setting-summary-text');
+const settingSummaryAgentSelect = $('#setting-summary-agent-select');
+const refreshMemoryBtn = $('#refresh-memory-btn');
+const saveSummaryBtn = $('#save-summary-btn');
 
 // Range outputs
 const ranges = [
@@ -607,6 +612,7 @@ function handleServerMessage(data) {
       if (data.total_tokens !== undefined) state.totalTokens = data.total_tokens;
       if (data.total_words !== undefined) state.totalWords = data.total_words;
       if (data.max_tokens !== undefined) state.maxTokens = data.max_tokens;
+      if (data.summary !== undefined) state.summary = data.summary;
 
       if (data.current_model && statusModel) {
         statusModel.textContent = data.current_model;
@@ -627,6 +633,8 @@ function handleServerMessage(data) {
         updateGenStats(state.messages, true);
         state.genStats.active = false;
       }
+      
+      updateMemoryTab();
       break;
 
     case 'stream_update': {
@@ -1704,6 +1712,9 @@ function switchMainTab(tabId) {
     const panel = document.getElementById('panelSub-' + name);
     if (panel) panel.classList.add('active');
   }
+  
+  state.activeSubTab = tabId;
+  updateMemoryTab();
 }
 
 // Wire up the static Chat tab
@@ -1807,6 +1818,14 @@ document.querySelectorAll('.settings-tab').forEach(btn => {
     btn.classList.add('active');
     const panel = document.getElementById(btn.dataset.tab);
     if (panel) panel.classList.add('active');
+    
+    if (btn.dataset.tab === 'settings-memory') {
+      // On first open, default to active tab
+      if (settingSummaryAgentSelect) {
+         settingSummaryAgentSelect.value = state.activeSubTab || 'chat';
+      }
+      updateMemoryTab();
+    }
   });
 });
 
@@ -2040,6 +2059,48 @@ function formatMultimodalContent(text) {
   // Strip image data, leave placeholder if vision is disabled
   const imageRegex = /!\[(.*?)\]\((data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+)\)/g;
   return text.replace(imageRegex, "[Image: $1]");
+}
+
+function updateMemoryTab(forceRebuild = false) {
+  if (!settingSummaryText || !settingSummaryAgentSelect) return;
+  
+  // 1. Sync select options with current sub-agents
+  const subAgentNames = Object.keys(state.subAgents || {}).sort();
+  const optionValues = ['chat', ...subAgentNames.map(n => 'sub-' + n)];
+  
+  // Only rebuild options if list of sub-agents changed or forced
+  const currentOptionValues = Array.from(settingSummaryAgentSelect.options).map(o => o.value);
+  if (forceRebuild || JSON.stringify(optionValues) !== JSON.stringify(currentOptionValues)) {
+    const prevVal = settingSummaryAgentSelect.value;
+    settingSummaryAgentSelect.innerHTML = `
+      <option value="chat">Main Orchestrator</option>
+      ${subAgentNames.map(name => `<option value="sub-${name}">${escapeHtml(name)}</option>`).join('')}
+    `;
+    // Try to restore previous selection, or follow active tab if it's the first time
+    if (optionValues.includes(prevVal)) {
+      settingSummaryAgentSelect.value = prevVal;
+    } else {
+      settingSummaryAgentSelect.value = state.activeSubTab || 'chat';
+    }
+  }
+
+  const selectedId = settingSummaryAgentSelect.value;
+  
+  if (selectedId === 'chat') {
+    settingSummaryText.value = state.summary || "";
+  } else if (selectedId.startsWith('sub-')) {
+    const name = selectedId.substring(4);
+    const sa = state.subAgents[name];
+    settingSummaryText.value = (sa && sa.summary) ? sa.summary : "";
+  }
+}
+
+if (refreshMemoryBtn) {
+  refreshMemoryBtn.addEventListener('click', () => updateMemoryTab(true));
+}
+
+if (settingSummaryAgentSelect) {
+  settingSummaryAgentSelect.addEventListener('change', () => updateMemoryTab(false));
 }
 
 // ── Image Handling ───────────────────────────────────────────────────────────
@@ -2286,6 +2347,40 @@ if ($('#apply-mcp-btn')) {
     $('#apply-mcp-btn').textContent = 'Applying...';
     setTimeout(() => {
       $('#apply-mcp-btn').textContent = 'Apply MCP Config';
+    }, 2000);
+  });
+}
+
+if (saveSummaryBtn) {
+  saveSummaryBtn.addEventListener('click', () => {
+    const content = settingSummaryText.value;
+    const selectedId = settingSummaryAgentSelect ? settingSummaryAgentSelect.value : (state.activeSubTab || 'chat');
+    const instanceName = selectedId.startsWith('sub-') ? selectedId.substring(4) : state.sessionName;
+    
+    send({
+      type: 'edit_summary',
+      instance_name: instanceName,
+      content: content
+    });
+    
+    saveSummaryBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+      </svg>
+      Updated!
+    `;
+    saveSummaryBtn.classList.remove('btn-primary');
+    saveSummaryBtn.classList.add('btn-success');
+    
+    setTimeout(() => {
+      saveSummaryBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+          <path d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+        </svg>
+        Update Memory
+      `;
+      saveSummaryBtn.classList.remove('btn-success');
+      saveSummaryBtn.classList.add('btn-primary');
     }, 2000);
   });
 }
