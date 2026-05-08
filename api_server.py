@@ -568,6 +568,10 @@ def create_app(agents, agent_pool, config=None):
                 agent_auto_continue = ui_cfg.get('auto_continue')
                 read_file_limit = ui_cfg.get('read_file_limit')
 
+                # Remove any existing keys that should not be passed to LLM
+                for key in NON_LLM_KEYS:
+                    agent_runner.llm.generate_cfg.pop(key, None)
+
                 agent_runner.llm.generate_cfg.update(pure_llm_cfg)
                 if disabled_tools is not None:
                     agent_runner.llm.generate_cfg['disabled_tools'] = disabled_tools
@@ -1139,12 +1143,16 @@ def create_app(agents, agent_pool, config=None):
                 elif msg_type == 'approve':
                     rid = data.get('request_id')
                     if rid and agent_pool:
+                        is_auto = data.get('automated', False)
+                        logger.info(f"[{'AUTO' if is_auto else 'USER'}] Approving request: {rid}")
                         agent_pool.operation_manager.user_approve(rid)
 
                 elif msg_type == 'reject':
                     rid = data.get('request_id')
                     reason = data.get('reason', 'Rejected by user')
                     if rid and agent_pool:
+                        is_auto = data.get('automated', False)
+                        logger.info(f"[{'AUTO' if is_auto else 'USER'}] Rejecting request: {rid}. Reason: {reason}")
                         agent_pool.operation_manager.user_reject(rid, reason)
 
                 elif msg_type == 'ask_security':
@@ -1230,12 +1238,15 @@ def create_app(agents, agent_pool, config=None):
                                     if auto_apply:
                                         resp_upper = parsing_response.upper()
                                         if "[YES]" in resp_upper or resp_upper.strip() == "YES" or resp_upper.strip().startswith("YES"):
+                                            logger.info(f"[SECURITY] Automated Approval for {rid}")
                                             agent_pool.operation_manager.user_approve(rid)
                                         elif "[NO]" in resp_upper or resp_upper.strip() == "NO" or resp_upper.strip().startswith("NO"):
                                             parts = re.split(r'\[NO\]', parsing_response, flags=re.IGNORECASE)
                                             reason = parts[-1].strip() if len(parts) > 1 else parsing_response
+                                            logger.info(f"[SECURITY] Automated Rejection for {rid}. Reason: {reason}")
                                             agent_pool.operation_manager.user_reject(rid, reason)
                                         else:
+                                            logger.info(f"[SECURITY] Automated Rejection for {rid} (Ambiguous Response)")
                                             agent_pool.operation_manager.user_reject(rid, f"Security check failed to give clear YES/NO. Response was: {parsing_response}")
                                     else:
                                         # Send back to UI to display (use display_response which includes thinking)

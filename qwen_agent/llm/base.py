@@ -180,8 +180,8 @@ class BaseChatModel(ABC):
             )
 
         generate_cfg = merge_generate_cfgs(base_generate_cfg=self.generate_cfg, new_generate_cfg=extra_generate_cfg)
-        if 'seed' not in generate_cfg:
-            generate_cfg['seed'] = random.randint(a=0, b=2**30)
+        # if 'seed' not in generate_cfg:
+        #     generate_cfg['seed'] = random.randint(a=0, b=2**30)
         if 'lang' in generate_cfg:
             lang: Literal['en', 'zh'] = generate_cfg.pop('lang')
         else:
@@ -195,11 +195,10 @@ class BaseChatModel(ABC):
         # Not precise. It's hard to estimate tokens related with function calling and multimodal items.
         max_input_tokens = generate_cfg.pop('max_input_tokens', DEFAULT_MAX_INPUT_TOKENS)
         
-        # Strip agent-specific settings that should not be sent to LLM APIs
         agent_settings = [
             'disabled_tools', 'max_turns', 'auto_continue', 'auto_rollback_on_loop',
             'read_file_limit', 'mcpServers', 'work_access_folders',
-            'grep_char_limit', 'shell_char_limit', 'code_char_limit'
+            'grep_char_limit', 'shell_char_limit', 'code_char_limit', 'seed'
         ]
         for setting in agent_settings:
             generate_cfg.pop(setting, None)

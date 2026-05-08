@@ -207,8 +207,19 @@ rules:
     def update_llm_cfg(self, new_cfg: dict):
         """Update the global LLM config and propagate it to all loaded agents."""
         self.llm_cfg.update(new_cfg)
+        
+        # Keys that should NEVER be passed to sub-agent LLM chat API
+        EXCLUDE_KEYS = {
+            'max_auto_rollbacks', 'auto_rollback_on_loop', 'auto_continue', 
+            'max_turns', 'mcpServers', 'work_access_folders', 'seed',
+            'read_file_limit', 'grep_char_limit', 'shell_char_limit', 'code_char_limit'
+        }
+        
         for agent_name, agent in self.agents.items():
             if hasattr(agent, 'llm') and hasattr(agent.llm, 'generate_cfg'):
+                # Clean sub-agent config of any internal keys before updating
+                for key in EXCLUDE_KEYS:
+                    agent.llm.generate_cfg.pop(key, None)
                 # Extract max_input_tokens if it's at the top level, consistent with BaseChatModel.__init__
                 update_data = copy.deepcopy(new_cfg)
                 if 'max_input_tokens' in update_data and 'max_input_tokens' not in update_data.get('generate_cfg', {}):

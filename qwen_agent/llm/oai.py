@@ -34,6 +34,16 @@ from qwen_agent.llm.schema import ASSISTANT, FunctionCall, Message
 from qwen_agent.log import logger
 
 
+# Standard OpenAI-compatible inference parameters
+ALLOWED_LLM_PARAMS = {
+    'temperature', 'top_p', 'top_k', 'n', 'stop', 'max_tokens',
+    'presence_penalty', 'frequency_penalty', 'logit_bias', 'user',
+    'response_format', 'tools', 'tool_choice', 'parallel_tool_calls',
+    'min_p', 'repeat_penalty', 'repetition_penalty', 'extra_body',
+    'timeout', 'request_timeout'
+}
+
+
 @register_llm('oai')
 class TextChatAtOAI(BaseFnCallModel):
 
@@ -179,9 +189,8 @@ class TextChatAtOAI(BaseFnCallModel):
         logger.debug(f'LLM Input generate_cfg: \n{generate_cfg}')
         local_model = generate_cfg.pop('model', self.model)
         
-        # Filter out custom agent settings that are not intended for the LLM API
-        for k in ['max_turns', 'auto_continue', 'read_file_limit', 'grep_char_limit', 'shell_char_limit', 'code_char_limit', 'work_access_folders', 'mcpServers']:
-            generate_cfg.pop(k, None)
+        # Strict Allowlist: Only pass parameters that the LLM API actually understands
+        generate_cfg = {k: v for k, v in generate_cfg.items() if k in ALLOWED_LLM_PARAMS}
             
         try:
             response = self._chat_complete_create(model=local_model, messages=messages, stream=True, **generate_cfg)
@@ -254,9 +263,8 @@ class TextChatAtOAI(BaseFnCallModel):
         messages = self.convert_messages_to_dicts(messages)
         local_model = generate_cfg.pop('model', self.model)
 
-        # Filter out custom agent settings that are not intended for the LLM API
-        for k in ['max_turns', 'auto_continue', 'read_file_limit', 'grep_char_limit', 'shell_char_limit', 'code_char_limit', 'work_access_folders', 'mcpServers']:
-            generate_cfg.pop(k, None)
+        # Strict Allowlist: Only pass parameters that the LLM API actually understands
+        generate_cfg = {k: v for k, v in generate_cfg.items() if k in ALLOWED_LLM_PARAMS}
 
         try:
             response = self._chat_complete_create(model=local_model, messages=messages, stream=False, **generate_cfg)

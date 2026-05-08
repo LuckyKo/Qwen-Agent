@@ -1310,7 +1310,7 @@ function renderApprovals() {
     bar.style.display = 'none';
     
     pending.forEach(ap => {
-      send({ type: 'reject', request_id: ap.request_id, reason: reason });
+      send({ type: 'reject', request_id: ap.request_id, reason: reason, automated: true });
     });
     return;
   }

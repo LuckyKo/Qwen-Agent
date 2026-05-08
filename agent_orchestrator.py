@@ -663,8 +663,6 @@ class OrchestratorAgent(Assistant):
             num_llm_calls_available -= 1
     
             extra_generate_cfg = {'lang': lang}
-            if kwargs.get('seed') is not None:
-                extra_generate_cfg['seed'] = kwargs['seed']
     
             # --- ASYNC MESSAGE INJECTION ---
             if hasattr(self.agent_pool, 'async_message_queue') and self.agent_pool.async_message_queue:
